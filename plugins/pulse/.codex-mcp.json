@@ -1,0 +1,17 @@
+{
+  "mcpServers": {
+    "pulse": {
+      "command": "node",
+      "args": ["./scripts/pulse-mcp.mjs"],
+      "cwd": ".",
+      "env_vars": ["PULSE_HOME", "PULSE_API_URL", "PULSE_ALLOW_CUSTOM_API", "PULSE_NO_BROWSER", "DISPLAY", "WAYLAND_DISPLAY", "SSH_CONNECTION"],
+      "startup_timeout_sec": 20,
+      "tool_timeout_sec": 180,
+      "tools": {
+        "pulse_status": { "approval_mode": "approve" },
+        "pulse_skills": { "approval_mode": "approve" },
+        "pulse_help": { "approval_mode": "approve" }
+      }
+    }
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "name": "pulse",
+  "version": "0.5.0",
+  "description": "Connect Claude Code to Pulse: choose the Pulse project for each repository, decide what Pulse may collect (off by default: level-0 metadata, or level-1 session reports you approve on the web), load the skills added to your Pulse projects, and use the Pulse tools for daily updates and changelogs with the same sign-in.",
+  "author": { "name": "Paralect", "url": "https://paralect.ai" },
+  "homepage": "https://paralect.ai",
+  "repository": "https://github.com/prlct/pulse-plugin",
+  "license": "UNLICENSED",
+  "keywords": ["pulse", "project", "analytics", "skills", "mcp"],
+  "hooks": "./hooks/claude.json",
+  "mcpServers": {
+    "pulse": {
+      "command": "node",
+      "args": ["${CLAUDE_PLUGIN_ROOT}/scripts/pulse-mcp.mjs"]
+    }
+  }
+}

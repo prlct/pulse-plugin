@@ -1,0 +1,13 @@
+{
+  "name": "pulse",
+  "owner": { "name": "Paralect", "url": "https://paralect.ai" },
+  "metadata": { "description": "Pulse plugins for local AI agents." },
+  "plugins": [
+    {
+      "name": "pulse",
+      "source": "./plugins/pulse",
+      "description": "Connect Claude Code to Pulse: choose the Pulse project for each repository, decide what Pulse may collect (off by default: level-0 metadata, or level-1 session reports you approve on the web) and load the skills added to your Pulse projects.",
+      "category": "productivity"
+    }
+  ]
+}

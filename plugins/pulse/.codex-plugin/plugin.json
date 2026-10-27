@@ -1,0 +1,23 @@
+{
+  "name": "pulse",
+  "version": "0.5.0",
+  "description": "Connect Codex to Pulse: choose the Pulse project for each repository, decide what Pulse may collect (off by default: level-0 metadata, or level-1 session reports you approve on the web), load the skills added to your Pulse projects, and use the Pulse tools for daily updates and changelogs with the same sign-in.",
+  "author": { "name": "Paralect", "url": "https://paralect.ai" },
+  "homepage": "https://paralect.ai",
+  "repository": "https://github.com/prlct/pulse-plugin",
+  "license": "UNLICENSED",
+  "keywords": ["pulse", "project", "analytics", "skills", "mcp"],
+  "skills": "./skills/",
+  "hooks": "./hooks/codex.json",
+  "mcpServers": "./.codex-mcp.json",
+  "interface": {
+    "displayName": "Pulse",
+    "shortDescription": "Bind repositories to Pulse projects and control what Pulse may collect",
+    "longDescription": "Signs in to Pulse once per computer, binds each repository to a Pulse project you choose, and records level-0 metadata (tool, MCP server and skill names with counts, model, tokens, timing) only for projects where you turned it on. At level 1 your agent also writes session reports, saved as private drafts you approve on the Pulse website. Prompts, conversation and tool arguments are never collected. Loads the skills added to your Pulse projects (verified, cached locally). Includes the Pulse MCP tools for daily updates and changelogs: no separate connector needed.",
+    "developerName": "Paralect",
+    "category": "Productivity",
+    "capabilities": ["Interactive", "Read", "Write"],
+    "websiteURL": "https://paralect.ai",
+    "defaultPrompt": "Show my Pulse status for this repository."
+  }
+}

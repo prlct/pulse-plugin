@@ -1,0 +1,38 @@
+{
+  "description": "Pulse: level-0 metadata (tool, MCP server and skill names with counts, model, tokens, timing) for repositories you bound to a Pulse project with collection on; at level 1, session reports your agent writes and you approve on the web. Never reads prompts, tool arguments or outputs.",
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "command -v node >/dev/null 2>&1 || exit 0; node \"${PLUGIN_ROOT}/scripts/pulse.mjs\" hook codex SessionStart || true",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "command -v node >/dev/null 2>&1 || exit 0; node \"${PLUGIN_ROOT}/scripts/pulse.mjs\" hook codex PostToolUse || true",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "command -v node >/dev/null 2>&1 || exit 0; node \"${PLUGIN_ROOT}/scripts/pulse.mjs\" hook codex Stop || true",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}
