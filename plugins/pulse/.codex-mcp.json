@@ -10,7 +10,8 @@
       "tools": {
         "pulse_status": { "approval_mode": "approve" },
         "pulse_skills": { "approval_mode": "approve" },
-        "pulse_help": { "approval_mode": "approve" }
+        "pulse_help": { "approval_mode": "approve" },
+        "pulse_report": { "approval_mode": "approve" }
       }
     }
   }

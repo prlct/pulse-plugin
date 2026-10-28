@@ -3,22 +3,29 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { buildTurnEvent, parseCounterLog, saveDroppedEvents, spoolEvent, spoolPending } from './events.mjs';
+import { isHeartbeatDue } from './flush.mjs';
 import { repoContext } from './git.mjs';
 import { attachSkillRun, noteEndedSession, settleRuns, takeSessionRuns } from './skills.mjs';
 import { sessionNotice } from './updates.mjs';
 import {
   COLLECTION_REFRESH_AFTER_MS,
+  SESSION_MAX_AGE_MS,
   bindingStatus,
+  describeEarlierSession,
+  earlierSessionsIn,
   isCollectionOlderThan,
   isRecordingStateUnusable,
   isSignedIn,
+  recentPrompts,
   recordingAllowed,
   reportWindowStart,
   runUnlessBusy,
+  transcriptPathOrNull,
 } from './state.mjs';
 import { claudeUsage, codexBaseline, codexUsage, readNewLines } from './transcript.mjs';
 import {
   appendLine,
+  cmdRef,
   countKey,
   deriveSessionFileKey,
   fileSizeOrZero,
@@ -41,18 +48,31 @@ import {
 const SCRIPT = fileURLToPath(new URL('../pulse.mjs', import.meta.url));
 const SEEN_IDS_MAX = 64;
 const EMITTED_MAX = 64;
-const SESSION_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 const REFRESH_REQUEST_EVERY_MS = 30_000;
 const REGISTER_REQUEST_EVERY_MS = 10 * 60 * 1000;
+const HEARTBEAT_REQUEST_EVERY_MS = 10 * 60 * 1000;
 const REFRESHABLE_REASONS = new Set(['unknown_collection', 'collection_blocked', 'block_not_cached']);
 export const SESSION_END_LOCK_WAIT_MS = 500;
 const MS_PER_MINUTE = 60_000;
-function reportPrompt(collection) {
+function earlierSessionsNote({ start, sessions }) {
+  if (sessions.length === 0) {
+    return '';
+  }
+  const transcripts = sessions.map(([, session]) => describeEarlierSession(session, start)).join('; ');
+  return `Earlier sessions in this project may have unreported work. Before deciding, in each transcript read only the user prompts and assistant replies in the range given next to it (skip tool calls and results) and include that work: ${transcripts}. `;
+}
+
+function reportPrompt(collection, host, earlier) {
   const start = reportWindowStart(collection);
   const window = start ? `Cover only work after ${localDateTime(start)} (local time), never work from while collection was paused. ` : '';
+  const minutes = collection.report?.intervalMinutes;
+  const every = Number.isFinite(minutes) && minutes > 0 ? ` (every ${minutes} min)` : '';
+  const earlierScope = earlier.sessions.length > 0 ? ', in this session or in the earlier sessions above' : '';
   return (
-    'Pulse: a scheduled session report is due for this project. Run the Pulse report skill (/pulse:report) and send the report with trigger "scheduled". ' +
-    `${window}If there was no real work in that time (only chat, thanks or nothing new), send nothing and say so in one line.`
+    `Pulse automatic session report${every}: your assistant writes it now and saves it as a private draft for you to review in Pulse. ` +
+    `Assistant: run the Pulse report skill (${cmdRef(host, 'report')}) and send the report with trigger "scheduled". ` +
+    `${window}${earlierSessionsNote(earlier)}` +
+    `If there was no real work in that time${earlierScope} (only chat, thanks or nothing new), send nothing and say so in one line.`
   );
 }
 
@@ -162,6 +182,39 @@ function logSpawnFailureThrottled(home, err, now) {
   return logError(home, 'background upload could not start; the next hook tries again', err);
 }
 
+function noteCodexHookRunOrLog(state, now) {
+  try {
+    state.noteCodexHookRun(now);
+  } catch (err) {
+    logError(state.home, 'this hook run was not noted; Pulse status may say the hooks have not run', err);
+  }
+}
+
+export async function claimHeartbeatRequest(state, { apiUrl, record, providerId, now }) {
+  if (!isSignedIn(record) || !isHeartbeatDue(record, providerId, now)) {
+    return false;
+  }
+  if (now - (pastTimeOrNull(state.status(apiUrl).heartbeatRequestedAt?.[providerId]) ?? 0) <= HEARTBEAT_REQUEST_EVERY_MS) {
+    return false;
+  }
+  return runUnlessBusy(
+    state,
+    'heartbeat request time not saved; no heartbeat requested this time',
+    async () => {
+      const saved = await state.setStatus(apiUrl, (s) => ({ ...s, heartbeatRequestedAt: { ...(s.heartbeatRequestedAt ?? {}), [providerId]: now } }));
+      return saved !== null;
+    },
+    false,
+  );
+}
+
+async function requestHeartbeatFlush(state, { providerId, now, flush }) {
+  const apiUrl = state.apiUrl();
+  if (await claimHeartbeatRequest(state, { apiUrl, record: state.auth(apiUrl), providerId, now })) {
+    flush(['--provider', providerId]);
+  }
+}
+
 const isEmpty = (counts) =>
   Object.keys(counts.tools).length + Object.keys(counts.mcp).length + Object.keys(counts.skills).length === 0;
 
@@ -170,8 +223,28 @@ const sessionTurnKey = (session) => `n${session.turns}.${session.startedAt}`;
 export async function runHook(host, eventName, payload, { state, now = Date.now(), flush = spawnFlush } = {}) {
   const provider = findProvider(host);
   if (!provider) {
-    return;
+    return undefined;
   }
+  if (host === 'codex') {
+    noteCodexHookRunOrLog(state, now);
+  }
+  let hasSpawnedFlush = false;
+  const spawnTrackedFlush = (args) => {
+    hasSpawnedFlush = true;
+    return flush(args);
+  };
+  const result = await handleHookEvent(provider, host, eventName, payload, { state, now, flush: spawnTrackedFlush });
+  if (eventName !== 'SessionEnd' && !hasSpawnedFlush) {
+    try {
+      await requestHeartbeatFlush(state, { providerId: provider.id, now, flush });
+    } catch (err) {
+      logError(state.home, 'heartbeat request failed; the next hook tries again', err);
+    }
+  }
+  return result;
+}
+
+async function handleHookEvent(provider, host, eventName, payload, { state, now, flush }) {
   const fields = pickPayload(payload);
   if (!fields.sessionId) {
     return;
@@ -374,17 +447,22 @@ export async function runHook(host, eventName, payload, { state, now = Date.now(
   } else {
     await requestRefresh(state, allowed, { apiUrl, now, flush, flushArgs });
   }
-  if (host === 'claude' && allowed.ok) {
+  if (allowed.ok) {
     const promptKey = `${allowed.binding.projectId}:${deriveSessionFileKey(providerId, fields.sessionId)}`;
-    return promptReportIfDue(state, { apiUrl, projectId: allowed.binding.projectId, promptKey, isContinuation: fields.stopHookActive, now });
+    return promptReportIfDue(state, {
+      apiUrl,
+      host,
+      projectId: allowed.binding.projectId,
+      promptKey,
+      transcriptPath: transcriptPathOrNull(fields.transcriptPath),
+      isContinuation: fields.stopHookActive,
+      now,
+    });
   }
 }
 
 const isReportDue = (report, promptedAt, now) =>
   Date.parse(report.nextReportAt) <= now && now - promptedAt >= report.intervalMinutes * MS_PER_MINUTE;
-
-const recentPrompts = (prompts, now) =>
-  Object.fromEntries(Object.entries(prompts).filter(([, prompt]) => now - (prompt?.seenAt ?? 0) <= SESSION_MAX_AGE_MS));
 
 const latestPromptIn = (prompts, projectId) =>
   Math.max(
@@ -394,27 +472,61 @@ const latestPromptIn = (prompts, projectId) =>
       .map(([, prompt]) => prompt?.promptedAt ?? 0),
   );
 
-async function promptReportIfDue(state, { apiUrl, projectId, promptKey, isContinuation, now }) {
+function markListed(prompts, prompting) {
+  if (!Array.isArray(prompting?.listedKeys) || !Number.isFinite(prompting.promptedAt)) {
+    return {};
+  }
+  return Object.fromEntries(
+    prompting.listedKeys
+      .filter((key) => typeof key === 'string' && Object.hasOwn(prompts, key))
+      .map((key) => [key, { ...prompts[key], listedAt: prompting.promptedAt }]),
+  );
+}
+
+function nextPromptEntry(previous, { host, transcriptPath, promptedAt, isDue, isReportContinuation, listedKeys, now }) {
+  return {
+    promptedAt: isDue ? now : promptedAt,
+    seenAt: isReportContinuation && Number.isFinite(previous.seenAt) ? previous.seenAt : now,
+    host,
+    transcriptPath: transcriptPath ?? transcriptPathOrNull(previous?.transcriptPath),
+    isReportAsked: isDue,
+    listedKeys,
+    ...(isReportContinuation && Number.isFinite(previous.promptedAt) ? { listedAt: previous.promptedAt } : {}),
+  };
+}
+
+async function promptReportIfDue(state, { apiUrl, host, projectId, promptKey, transcriptPath, isContinuation, now }) {
   const collection = state.collection(apiUrl, projectId)?.state;
-  if (collection?.level !== 'summary' || collection.report?.mode !== 'scheduled') {
+  if (collection?.level !== 'summary') {
     return undefined;
   }
+  const isScheduled = collection.report?.mode === 'scheduled';
   let isDue = false;
+  let earlier = null;
   const saved = await runUnlessBusy(
     state,
-    'scheduled report prompt skipped',
+    'scheduled report prompt state not saved; no prompt this turn',
     async () => {
       await state.setStatus(apiUrl, (s) => {
         const prompts = recentPrompts(s.reportPrompts ?? {}, now);
         const promptedAt = latestPromptIn(prompts, projectId);
-        isDue = !isContinuation && isReportDue(collection.report, promptedAt, now);
-        return { ...s, reportPrompts: { ...prompts, [promptKey]: { promptedAt: isDue ? now : promptedAt, seenAt: now } } };
+        const previous = prompts[promptKey];
+        const isReportContinuation = isContinuation && previous?.isReportAsked === true;
+        isDue = isScheduled && !isContinuation && isReportDue(collection.report, promptedAt, now);
+        earlier = isDue ? earlierSessionsIn(s, { collection, projectId, exceptKey: promptKey, now }) : null;
+        const listedKeys = earlier?.sessions.map(([key]) => key) ?? [];
+        const entry = nextPromptEntry(previous, { host, transcriptPath, promptedAt, isDue, isReportContinuation, listedKeys, now });
+        const listed = isReportContinuation ? markListed(prompts, previous) : {};
+        return { ...s, reportPrompts: { ...prompts, ...listed, [promptKey]: entry } };
       });
       return true;
     },
     false,
   );
-  return saved && isDue ? { decision: 'block', reason: reportPrompt(collection) } : undefined;
+  if (!saved || !isDue) {
+    return undefined;
+  }
+  return { decision: 'block', reason: reportPrompt(collection, host, earlier) };
 }
 
 function leaveRunsForNextUpload(state, ended) {

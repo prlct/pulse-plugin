@@ -40,6 +40,11 @@ import {
 } from './util.mjs';
 
 const HEARTBEAT_EVERY_MS = 6 * 60 * 60 * 1000;
+
+export function isHeartbeatDue(record, providerId, now) {
+  const registeredAt = record?.registeredProviders?.[providerId];
+  return Boolean(registeredAt) && (now - registeredAt > HEARTBEAT_EVERY_MS || record.registeredVersions?.[providerId] !== PLUGIN_VERSION);
+}
 const BACKOFF_MAX_MS = 30 * 60 * 1000;
 const BACKOFF_BASE_MS = 30_000;
 const BACKOFF_MAX_DOUBLINGS = 6;
@@ -409,20 +414,14 @@ export async function flush(state, { projects = [], provider = null, background 
 
     const record = state.auth(apiUrl);
     if (!networkFailed && isSignedIn(record)) {
-      const registered = record.registeredProviders ?? {};
-      const versions = record.registeredVersions ?? {};
-      const due = PROVIDER_IDS.filter(
-        (id) =>
-          (id === provider && !registered[id]) ||
-          (registered[id] && (now - registered[id] > HEARTBEAT_EVERY_MS || versions[id] !== PLUGIN_VERSION)),
-      );
-      for (const providerId of due) {
+      const isOwnHeartbeatDue = PROVIDER_IDS.includes(provider) && (!record.registeredProviders?.[provider] || isHeartbeatDue(record, provider, now));
+      if (isOwnHeartbeatDue) {
         try {
-          await heartbeat(state, authFor(providerId), now);
+          await heartbeat(state, authFor(provider), now);
         } catch (err) {
           networkFailed ||= transient(err);
           if (!transient(err) || isUnknownNotFound(err)) {
-            logError(state.home, `heartbeat for ${providerId} failed`, err);
+            logError(state.home, `heartbeat for ${provider} failed`, err);
           }
         }
       }

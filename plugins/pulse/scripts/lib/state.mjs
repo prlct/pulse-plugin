@@ -3,11 +3,15 @@ import path from 'node:path';
 
 import {
   DEFAULT_API_URL,
+  PLUGIN_VERSION,
   acquireLock,
   findProvider,
+  hasUnsafeForOneLine,
   homeDir,
   isUnreadablePath,
+  isoNow,
   logError,
+  modifiedAtOrNull,
   pastTimeOrNull,
   readJson,
   reportUnrestrictedDirs,
@@ -32,6 +36,9 @@ export function isCollectionOlderThan(cached, ms, now = Date.now()) {
 const HOST_RECENT_MS = 12 * 60 * 60 * 1000;
 const HOST_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 const STATE_WAIT_MS = 3_000;
+const HOOK_RUN_REFRESH_MS = 60 * 60 * 1000;
+const HOOK_RUN_VERSIONS_MAX = 4;
+const CODEX_HOOK_RUNS_FILE = 'hook-run-codex.json';
 const CRITICAL_WAIT_MS = 15_000;
 const STATE_LOCK_STALE_MS = 10_000;
 const AUTH_LOCK_STALE_MS = 30_000;
@@ -381,6 +388,29 @@ export class State {
     return { at: Number.isFinite(marker?.at) ? marker.at : 0, overrides: Number.isFinite(marker?.overrides) ? marker.overrides : null };
   }
 
+  codexHookRuns() {
+    const versions = this.read(CODEX_HOOK_RUNS_FILE, null)?.versions;
+    if (!versions || typeof versions !== 'object') {
+      return new Map();
+    }
+    return new Map(Object.entries(versions).filter(([, ranAt]) => Number.isFinite(ranAt)));
+  }
+
+  hasCodexHookRun(version) {
+    return this.codexHookRuns().has(version);
+  }
+
+  noteCodexHookRun(now = Date.now()) {
+    const runs = this.codexHookRuns();
+    const ranAt = runs.get(PLUGIN_VERSION);
+    if (ranAt !== undefined && now - ranAt < HOOK_RUN_REFRESH_MS) {
+      return false;
+    }
+    runs.set(PLUGIN_VERSION, now);
+    const newest = [...runs].sort(([, a], [, b]) => b - a).slice(0, HOOK_RUN_VERSIONS_MAX);
+    return this.writeIfReadable(CODEX_HOOK_RUNS_FILE, { versions: Object.fromEntries(newest) });
+  }
+
   async noteHost(key, host, now = Date.now()) {
     await this.updateIfReadable('hosts.json', (all) => {
       for (const [k, hosts] of Object.entries(all)) {
@@ -407,8 +437,8 @@ export class State {
     return this.read('status.json', {})[apiUrl] ?? {};
   }
 
-  async setStatus(apiUrl, fn, { waitMs = STATE_WAIT_MS } = {}) {
-    await this.updateIfReadable(
+  setStatus(apiUrl, fn, { waitMs = STATE_WAIT_MS } = {}) {
+    return this.updateIfReadable(
       'status.json',
       (all) => {
         all[apiUrl] = fn(all[apiUrl] ?? {});
@@ -536,6 +566,54 @@ export function reportWindowStart(collection) {
   const start = Math.max(Date.parse(collection?.report?.lastReportAt) || 0, Date.parse(collection?.collectingSince) || 0);
   return start > 0 ? start : null;
 }
+
+export const SESSION_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
+const EARLIER_SESSIONS_MAX = 5;
+
+export const recentPrompts = (prompts, now) =>
+  Object.fromEntries(Object.entries(prompts).filter(([, prompt]) => now - (prompt?.seenAt ?? 0) <= SESSION_MAX_AGE_MS));
+
+const TRANSCRIPT_EXTENSION = '.jsonl';
+
+export const transcriptPathOrNull = (file) =>
+  typeof file === 'string' && path.isAbsolute(file) && file.endsWith(TRANSCRIPT_EXTENSION) && !hasUnsafeForOneLine(file) ? file : null;
+
+const hasTranscriptFile = (session) => modifiedAtOrNull(session.transcriptPath) !== null;
+
+const hasWorkSinceListed = (session) => !Number.isFinite(session.listedAt) || session.seenAt > session.listedAt;
+
+const isDateTime = (ms) => typeof ms === 'number' && Number.isFinite(new Date(ms).getTime());
+
+function catchUpStart(collection, status) {
+  const windowStart = reportWindowStart(collection);
+  if (windowStart === null) {
+    return null;
+  }
+  return isDateTime(status.reportPromptsSince) ? Math.max(windowStart, status.reportPromptsSince) : windowStart;
+}
+
+const isUnreportedSince = (session, since) =>
+  isDateTime(session?.seenAt) &&
+  session.seenAt > since &&
+  findProvider(session.host) !== null &&
+  transcriptPathOrNull(session.transcriptPath) !== null &&
+  hasWorkSinceListed(session) &&
+  hasTranscriptFile(session);
+
+export function earlierSessionsIn(status, { collection, projectId, exceptKey = null, now }) {
+  const start = catchUpStart(collection, status);
+  if (start === null) {
+    return { start, sessions: [] };
+  }
+  const sessions = Object.entries(recentPrompts(status.reportPrompts ?? {}, now))
+    .filter(([key, session]) => key !== exceptKey && key.startsWith(`${projectId}:`) && isUnreportedSince(session, start))
+    .sort(([, a], [, b]) => b.seenAt - a.seenAt)
+    .slice(0, EARLIER_SESSIONS_MAX);
+  return { start, sessions };
+}
+
+export const describeEarlierSession = (session, start) =>
+  `${findProvider(session.host).label} ${JSON.stringify(session.transcriptPath)} (entries from ${isoNow(start)} to ${isoNow(session.seenAt)})`;
 
 export function collectionAllows(state) {
   return Boolean(state && state.configured && RECORDING_LEVELS.has(state.level) && !state.paused && !state.excluded);

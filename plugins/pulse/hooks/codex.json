@@ -1,5 +1,5 @@
 {
-  "description": "Pulse: level-0 metadata (tool, MCP server and skill names with counts, model, tokens, timing) for repositories you bound to a Pulse project with collection on; at level 1, session reports your agent writes and you approve on the web. Never reads prompts, tool arguments or outputs.",
+  "description": "Pulse: level-0 metadata (tool, MCP server and skill names with counts, model, tokens, timing) for repositories you bound to a Pulse project with collection on; at level 1, session reports your agent writes and you approve on the web (the Stop hook asks for a scheduled one when it is due). Never reads prompts, outputs or tool arguments other than the skill name into its state, and never sends them.",
   "hooks": {
     "SessionStart": [
       {

@@ -50,6 +50,8 @@ import {
   apiUrlKind,
   bindingStatus,
   collectionAllows,
+  describeEarlierSession,
+  earlierSessionsIn,
   isSignedIn,
   isStateBusy,
   normalizeApiUrl,
@@ -57,7 +59,7 @@ import {
   reportWindowStart,
   runUnlessBusy,
 } from './state.mjs';
-import { PROVIDERS, detectHost, hasUnsafeForOneLine, hostKey, inCodex, isUnreadablePath, localDateTime, logError, plain, quoted, safeCode, sleep, spawnDetached, writeJson } from './util.mjs';
+import { PLUGIN_VERSION, PROVIDERS, cmdRef, detectHost, hasUnsafeForOneLine, hostKey, inCodex, isUnreadablePath, localDateTime, logError, plain, quoted, safeCode, sleep, spawnDetached, writeJson } from './util.mjs';
 
 const SCRIPT = fileURLToPath(new URL('../pulse.mjs', import.meta.url));
 const LOGIN_TIMEOUT_MS = 10 * 60 * 1000;
@@ -119,16 +121,6 @@ class Exit extends Error {
   }
 }
 
-function cmdRef(host, sub) {
-  if (host === 'claude') {
-    return `/pulse:${sub}`;
-  }
-  if (host === 'codex') {
-    return `$pulse:${sub}`;
-  }
-  return `pulse ${sub}`;
-}
-
 const cli = (sub) => `node "${SCRIPT}" ${sub}`;
 
 const WINDOWS_SAFE_PATH_RE = /^[A-Za-z0-9 _.\-\\:]+$/;
@@ -182,11 +174,8 @@ function repairedReport(upload) {
   return { body: body || (practices.length > 0 ? PRACTICES_ONLY_BODY : ''), practices };
 }
 
-function reportScheduleLine(report, host) {
+function reportScheduleLine(report) {
   const last = formatTime(Date.parse(report?.lastReportAt));
-  if (report?.mode === 'scheduled' && host === 'codex') {
-    return `Last report: ${last} · Automatic reports run in Claude Code`;
-  }
   if (report?.mode !== 'scheduled') {
     return `Last report: ${last} · Next automatic report: off (reports on command only)`;
   }
@@ -471,6 +460,14 @@ export class Cli {
     return { lines, data: { ...(report.data ?? {}), droppedEvents, unreadable, unreadableQueue } };
   }
 
+  earlierSessionLines(collection, projectId) {
+    const { start, sessions } = earlierSessionsIn(this.state.status(this.apiUrl), { collection, projectId, now: Date.now() });
+    if (sessions.length === 0) {
+      return [];
+    }
+    return [EARLIER_SESSIONS_HEADING, ...sessions.map(([, session]) => `- ${describeEarlierSession(session, start)}`)];
+  }
+
   async describeStatusOrExplain() {
     try {
       return await this.describeStatus();
@@ -547,6 +544,9 @@ export class Cli {
     const version = versionLines(this.state, this.apiUrl, this.host);
     data.plugin = version.update;
     lines.push(...version.lines);
+    if (this.host === 'codex' && !this.state.hasCodexHookRun(PLUGIN_VERSION)) {
+      lines.push(CODEX_HOOKS_NOT_RUN);
+    }
     if (this.apiUrl !== 'https://api.paralect.ai') {
       lines.push(`Pulse API: ${this.apiUrl}${apiUrlKind(this.apiUrl) === 'custom' ? ' (not an official Pulse server)' : ''}`);
     }
@@ -623,11 +623,12 @@ export class Cli {
     lines.push(`Project: ${quoted(bound.binding.projectName)}`);
     lines.push(`Collection: ${levelText(cs)}`);
     if (cs?.level === 'summary') {
-      lines.push(reportScheduleLine(cs.report, this.host));
+      lines.push(reportScheduleLine(cs.report));
       const windowStart = reportWindowStart(cs);
       if (windowStart) {
         lines.push(`Reports cover work since ${localDateTime(windowStart)}`);
       }
+      lines.push(...this.earlierSessionLines(cs, bound.binding.projectId));
     }
     lines.push(`Last successful sync: ${formatTime(collection?.lastSyncAt)}`);
     const waiting = countPending(this.state, this.apiUrl, bound.binding.projectId);
@@ -1630,6 +1631,7 @@ export class Cli {
       await release();
     }
     dropSpool(this.state, { apiUrl: this.apiUrl });
+    await forgetEarlierSessions(this.state, this.apiUrl);
     return {
       lines: [
         'Signed out of Pulse on this computer, for both Claude Code and Codex. The plugin records and uploads nothing until you sign in again.',
@@ -1651,6 +1653,13 @@ async function removeSkillCacheOrLog(state, apiUrl) {
     logError(state.home, 'skill cache removal failed', err);
   }
 }
+
+const EARLIER_SESSIONS_HEADING =
+  'Earlier sessions that may have unreported work (a Pulse report reads only the user prompts and assistant replies in each range):';
+
+const CODEX_HOOKS_NOT_RUN =
+  `Codex hasn't run the Pulse hooks since plugin ${PLUGIN_VERSION} was installed, so Pulse records nothing here and automatic reports don't run. ` +
+  'Approve the Pulse hooks when Codex asks you to review them (in /hooks), then start a new Codex session.';
 
 const LOGOUT_LOCK_WAIT_MS = 5_000;
 const SIGN_IN_BUSY_FOR_LOGOUT =
@@ -1906,6 +1915,14 @@ async function revokeGrants(state, apiUrl, { current, orphans = [] }) {
   return { currentOutcome, retry };
 }
 
+async function forgetEarlierSessions(state, apiUrl) {
+  try {
+    await state.setStatus(apiUrl, (s) => ({ ...s, reportPrompts: {}, reportPromptsSince: Date.now() }));
+  } catch (err) {
+    logError(state.home, 'earlier sessions of the previous sign-in not forgotten; the next report prompt may still name them', err);
+  }
+}
+
 const holdsNewTokens = (auth, tokens) => auth.record()?.accessToken === tokens.access_token;
 
 async function saveSignIn(state, auth, pending, tokens) {
@@ -1916,6 +1933,7 @@ async function saveSignIn(state, auth, pending, tokens) {
     orphans: record?.orphanGrants,
   });
   dropSpool(state, { apiUrl: pending.apiUrl });
+  await forgetEarlierSessions(state, pending.apiUrl);
   await auth.saveTokens(tokens, Date.now(), {
     clientId: pending.clientId,
     redirectUris: pending.redirectUris,

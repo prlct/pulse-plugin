@@ -32,8 +32,8 @@ repository.
    does not, tell it you allowed it).
 3. Reply with the number of your project. The binding is confirmed in a Pulse dialog that Claude Code
    shows (**Accept** / **Decline**); nothing changes unless you accept it. Then choose what Pulse may
-   collect: `0` (metadata) is approved only by you on the Pulse website (the project's **Stats** →
-   **AI Activity**); `off` applies from the assistant.
+   collect: `0` (metadata) and `1` (session reports) are approved only by you on the Pulse website (the
+   project's **Stats** → **AI Activity**); `off` applies from the assistant.
 
 Already signed in from Codex on this computer? Skip the sign-in: `/pulse:status` shows the plugin as
 connected and goes straight to the project.
@@ -52,16 +52,18 @@ connected and goes straight to the project.
    - `PostToolUse` — `node ".../scripts/pulse.mjs" hook codex PostToolUse`
    - `Stop` — `node ".../scripts/pulse.mjs" hook codex Stop`
 
-   Until you trust them, the hooks do not run and nothing is recorded.
+   Until you trust them, the hooks do not run and nothing is recorded; `$pulse:status` says so until a
+   Pulse hook has run in Codex under the installed version.
 
 3. Run `$pulse:status`. The Pulse tools run in the plugin's MCP server, outside the Codex sandbox, so
-   there is no sandbox approval to give. Status and help run without asking; for sign-in, sign-out,
+   there is no sandbox approval to give. Status, help and session reports (private drafts you approve on
+   the Pulse website) run without asking; for sign-in, sign-out,
    project and data Codex shows the call and asks you to approve it. Ask the agent to connect Pulse and
    click **Allow** in your browser: the agent continues by itself (if it does not, tell it you allowed it).
 4. Reply with the number of your project. The binding is confirmed in a Pulse question that Codex shows
    (**Allow** / **Deny** / **Cancel**); nothing changes unless you allow it. Then choose what Pulse may
-   collect: `0` (metadata) is approved only by you on the Pulse website (the project's **Stats** →
-   **AI Activity**); `off` applies from the assistant.
+   collect: `0` (metadata) and `1` (session reports) are approved only by you on the Pulse website (the
+   project's **Stats** → **AI Activity**); `off` applies from the assistant.
 
 Already signed in from Claude Code on this computer? Codex uses the same sign-in: `$pulse:status`
 shows the plugin as connected and goes straight to the project. Codex reads the tool list once per
@@ -95,6 +97,10 @@ Codex (in a terminal, then start a new Codex session):
 codex plugin marketplace upgrade pulse
 ```
 
+Codex asks you to review the Pulse hooks again after an update that changes them (in `/hooks`). Until you
+trust them again, nothing is recorded and automatic reports do not run; `$pulse:status` says so while no
+Pulse hook has run in Codex under the installed version.
+
 When the installed version is below the minimum Pulse accepts, Pulse refuses its uploads and collection
 changes (`426 plugin_outdated`). Status then says `Uploads are paused until you update` with Pulse's
 message. Sign-in, status, projects, skills and sign-out keep working. Recorded events stay on this computer
@@ -108,14 +114,14 @@ added to it for 29 days.
 
 ## Commands
 
-| Claude Code            | Codex                  | What it does                                                                                                                             |
-| ---------------------- | ---------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
-| `/pulse:status`        | `$pulse:status`        | Connection, repository, project and collection state. Also connect / disconnect.                                                         |
-| `/pulse:project`       | `$pulse:project`       | Choose or change this repository's Pulse project.                                                                                        |
-| `/pulse:data`          | `$pulse:data`          | Show collection for this project, turn it `off`, `pause` or `exclude` it. `0`, `resume` and `include` are approved on the Pulse website. |
-| `/pulse:skills`        | `$pulse:skills`        | List the skills added to this repository's Pulse project.                                                                                |
-| `/pulse:skills <name>` | `$pulse:skills <name>` | Load that project skill and follow it for your task (see "Project skills").                                                              |
-| `/pulse:help`          | `$pulse:help`          | Command list.                                                                                                                            |
+| Claude Code            | Codex                  | What it does                                                                                                                                  |
+| ---------------------- | ---------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| `/pulse:status`        | `$pulse:status`        | Connection, repository, project and collection state. Also connect / disconnect.                                                              |
+| `/pulse:project`       | `$pulse:project`       | Choose or change this repository's Pulse project.                                                                                             |
+| `/pulse:data`          | `$pulse:data`          | Show collection for this project, turn it `off`, `pause` or `exclude` it. `0`, `1`, `resume` and `include` are approved on the Pulse website. |
+| `/pulse:skills`        | `$pulse:skills`        | List the skills added to this repository's Pulse project.                                                                                     |
+| `/pulse:skills <name>` | `$pulse:skills <name>` | Load that project skill and follow it for your task (see "Project skills").                                                                   |
+| `/pulse:help`          | `$pulse:help`          | Command list.                                                                                                                                 |
 
 Arguments follow the skill, for example `/pulse:data pause` or `$pulse:data off`.
 
@@ -129,7 +135,7 @@ The plugin's MCP server `pulse` (`scripts/pulse-mcp.mjs`, stdio, Node 20+, no de
 | `pulse_connect`    | Sign in: opens the browser and waits up to 110 s for Allow, then continues with the next step ("Still waiting" after that). When the browser cannot open (no opener, no display, an SSH session, or the opener fails at once) or the server is not an official one (its warning comes first), it returns the link at once. Repeated calls reuse the waiting link; `new_link` starts over and registers the plugin with Pulse again (like `login --new-client`). The Pulse server is never an argument |
 | `pulse_disconnect` | Sign out on this computer, for both assistants                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
 | `pulse_project`    | `list`, `bind` (`choice`; needs the user's confirmation), `unbind`                                                                                                                                                                                                                                                                                                                                                                                                                                    |
-| `pulse_data`       | `show`, `set` (`level` off or 0), `pause`, `resume`, `exclude`, `include`; `set 0`, `resume` and `include` change nothing and point the user to the Pulse website; `set off` needs the user's confirmation when the host shows a dialog                                                                                                                                                                                                                                                               |
+| `pulse_data`       | `show`, `set` (`level` off, 0 or 1), `pause`, `resume`, `exclude`, `include`; `set 0`, `set 1`, `resume` and `include` change nothing and point the user to the Pulse website; `set off` needs the user's confirmation when the host shows a dialog                                                                                                                                                                                                                                                   |
 | `pulse_skills`     | The skills of the bound project: name, slug, description (read-only)                                                                                                                                                                                                                                                                                                                                                                                                                                  |
 | `pulse_skill`      | `slug`: load that skill (verified, cached locally) and return its `SKILL.md`                                                                                                                                                                                                                                                                                                                                                                                                                          |
 | `pulse_report`     | `body`, `practices`, `trigger`: send a session report the agent wrote (`/pulse:report`) as a private draft; refuses an empty report without a request                                                                                                                                                                                                                                                                                                                                                 |
@@ -152,14 +158,16 @@ How the hosts start it:
   with `cwd: "."` (the installed plugin folder). Codex passes only a minimal environment, plus
   `PULSE_HOME`, `PULSE_API_URL`, `PULSE_ALLOW_CUSTOM_API` and `PULSE_NO_BROWSER`, and `DISPLAY`,
   `WAYLAND_DISPLAY` and `SSH_CONNECTION` (whether a browser can open where you are), listed in `env_vars`.
-  Only `pulse_status`, `pulse_skills` and `pulse_help` (read-only) are approved in that file;
-  `pulse_connect`, `pulse_disconnect`, `pulse_project`, `pulse_data` and `pulse_skill` keep Codex's default
-  prompt, so the user sees each call and its arguments.
+  Only `pulse_status`, `pulse_skills`, `pulse_help` (read-only) and `pulse_report` (saves a private draft you
+  approve on the Pulse website) are approved in that file; `pulse_connect`, `pulse_disconnect`,
+  `pulse_project`, `pulse_data` and `pulse_skill` keep Codex's default prompt, so the user sees each call and
+  its arguments.
 
-Raising what Pulse collects (the first choice of `0`, `0` after `off`, `resume`, `include`) is approved
-only on the Pulse website, in a browser session an assistant cannot reach: Pulse refuses it from every
-plugin sign-in (`403 raise_on_web`). The plugin sends no such request: `set 0`, `resume` and `include`
-change nothing and answer that the change needs the user's approval on the Pulse website, in the
+Raising what Pulse collects (the first choice of `0` or `1`, `0` or `1` after `off`, `1` after `0`, `resume`,
+`include`) is approved only on the Pulse website, in a browser session an assistant cannot reach: Pulse
+refuses it from every plugin sign-in (`403 raise_on_web`). For a raise, `set 0`, `resume` and `include`
+send no request and `set 1` is refused by Pulse; each changes nothing and answers that the change needs the
+user's approval on the Pulse website, in the
 project's **Stats** → **AI Activity** (with the link Pulse sends when it refuses a change itself, shown
 only when its host is the API host or the API host without its leading `api.`, or loopback for a loopback API). There
 is no confirmation dialog, `--yes` or printed command for a raise.
@@ -225,7 +233,7 @@ A bundle from Pulse is treated as untrusted data:
   anything outside the conversation, say what will happen and wait for the user's yes.
 
 Skill use (only after a successful load; a failed load or a listing is not counted) is recorded only while
-the project's collection is `0 · metadata`, not paused or excluded (the load asks Pulse for the current
+the project's collection is `0 · metadata` or `1 · session reports`, not paused or excluded (the load asks Pulse for the current
 choice), and only when Claude Code or Codex runs the load (the MCP tools, or the CLI in their shell): a load
 typed in a plain terminal records nothing. Loading the same skill twice by accident (the same tool call, or
 the same MCP server within 2 minutes) counts once; every other load counts. The load is
@@ -261,7 +269,8 @@ Known limits:
 
 ## What leaves this machine
 
-Nothing, until the repository is bound to a project **and** you set that project to `0 · metadata`.
+Nothing, until the repository is bound to a project **and** you set that project to `0 · metadata` or
+`1 · session reports`.
 Then, once per agent turn, Pulse receives:
 
 - timing (turn start and end), a per-session id and an event id hashed with a random salt that never
@@ -281,9 +290,18 @@ Then, once per agent turn, Pulse receives:
 
 Prompts, conversation, source code, file contents, secrets, tool arguments and tool output are never
 read into the plugin's state, stored or sent. At level 1 the agent also writes session reports (progress,
-blockers, decisions, practices; `/pulse:report`, or the Claude Code Stop hook when a scheduled report is
-due); Pulse saves each one as a private draft you edit, approve or discard on the web. Level 2 (full
-conversation) is not available in this release.
+blockers, decisions, practices; `/pulse:report` or `$pulse:report`, or the Claude Code or Codex Stop hook
+when a scheduled report is due); Pulse saves each one as a private draft you edit, approve or discard on
+the web. A session that ends after the last report (terminal closed, laptop asleep) is caught up by the next
+scheduled prompt in the project: it also names the local transcript files of up to 5 earlier Claude Code or
+Codex sessions of the project that may have unreported work, each with the time range from the report window
+start to that session's last recorded turn. The assistant reads only the user prompts and its replies in
+those ranges, on this computer. Once the assistant has run the report turn of a prompt, the sessions it
+named are named again only after they have a new turn. `pulse_status` lists the same sessions at level 1 in
+any report mode, so a manual report can include them too; status never marks them as named. The plugin itself keeps those paths and their times
+in its local state, and reads no prompts or outputs into its state, nor sends them. Signing out and signing
+in again (as anyone) clear that list, and from then on a range never starts before that sign-out or sign-in;
+if the state file cannot be written at that moment, the list is kept and the failure is logged. Level 2 (full conversation) is not available in this release.
 
 Pause (`data pause`), exclude (`data exclude`), turning collection off, unbinding (`project unbind`)
 and signing out (`logout`, which signs out both assistants on this computer) stop collection immediately; nothing from a pause is backfilled. Events
@@ -343,8 +361,8 @@ happen and wait for the user's yes. Rules:
 4. Project: call `pulse_project` (`list`), wait for the user's number, call it with `action: "bind"` and
    `choice`. The user confirms in the host's dialog. Without a dialog the result says nothing changed and
    gives the command the user runs in their own terminal; show it and do not call again to confirm.
-5. Data: call `pulse_data` (`show`), wait for `off` or `0`, call it with `action: "set"` and `level`.
-   Level 0, `resume` and `include` change nothing: the text says the user approves them on the Pulse
+5. Data: call `pulse_data` (`show`), wait for `off`, `0` or `1`, call it with `action: "set"` and `level`.
+   Levels 0 and 1, `resume` and `include` change nothing: the text says the user approves them on the Pulse
    website; show it. `off` asks in the dialog, and applies at once when there is no dialog.
 6. Never pick a project or a level for the user, never invent projects, and never pass prompts, code or
    file contents to the `pulse_*` tools.
@@ -380,16 +398,20 @@ Binding a project prints a question first and changes nothing. Pulse takes `--ye
 terminal where it sees no assistant: stdin is a terminal and the environment is not one Claude Code or
 Codex gives the commands they run (`CLAUDECODE`, `CLAUDE_CODE_ENTRYPOINT`, `CODEX_THREAD_ID`, ...). Run by
 an assistant (or without a terminal), `--yes` is refused ("Nothing changed"). An assistant that hides its
-environment and fakes a terminal is not detected (see "What the plugin cannot prevent"). `data set 0`,
-`resume` and `include` change nothing from the CLI either, in any terminal: they say the change needs your
-approval on the Pulse website. `data set off` asks first (`--yes` applies it), and `pause`, `exclude` and
+environment and fakes a terminal is not detected (see "What the plugin cannot prevent"). For a
+raise, `data set 0`, `resume` and `include` send nothing from the CLI either, in any terminal, and
+`data set 1` is refused by Pulse; each says the change needs your approval on the Pulse website. `data set off` asks first (`--yes` applies it), and `pause`, `exclude` and
 `unbind` apply at once; they only turn collection down.
 
 Add `--json` for machine-readable output. The host is detected from the environment (Claude Code sets
 `CLAUDECODE=1`, Codex sets `CODEX_THREAD_ID`), else from the one host whose `SessionStart` hook ran in
 this repository in the last 12 hours. The host matters only for which assistant registers itself with
-Pulse (a heartbeat before its first upload or setting change, and on `SessionStart`); the sign-in is the
-same for both. `login` waits in the foreground in a terminal and returns immediately (background
+Pulse (a heartbeat before its first upload or setting change); the sign-in is the same for both. While
+signed in, any hook except `SessionEnd`, and the MCP server when it starts, also send a heartbeat (the
+assistant and the plugin version only) in any repository when the last one is over 6 hours old or was
+sent from another plugin version of that assistant. Each assistant keeps its own heartbeat current; an
+upload never refreshes the other assistant's (it only registers an assistant that is not registered yet,
+or that Pulse no longer knows, when that assistant's queued events upload). `login` waits in the foreground in a terminal and returns immediately (background
 listener, 10-minute timeout) when an agent runs it. It is idempotent: signed in -> "Already connected";
 a sign-in already waiting (its listener still answers) -> the same link; `--force` or `--new-client`
 start a new attempt.
@@ -487,14 +509,19 @@ claude plugin validate . --strict
 
 Hooks used: Claude Code `SessionStart`, `UserPromptSubmit`, `PostToolUse`, `UserPromptExpansion`, `Stop`,
 `SessionEnd`; Codex `SessionStart`, `PostToolUse`, `Stop`. From a payload they read only `session_id`, `cwd`,
-`transcript_path`, `prompt_id`/`turn_id`, `model`, `tool_name`, `tool_use_id`, the Claude `Skill` tool's
-skill name, `expansion_type` and `command_name`; `UserPromptSubmit` uses only `session_id` and `cwd` (the
+`transcript_path`, `prompt_id`/`turn_id`, `model`, `tool_name`, `tool_use_id`, `stop_hook_active`, the
+Claude `Skill` tool's skill name, `expansion_type` and `command_name`; `UserPromptSubmit` uses only `session_id` and `cwd` (the
 prompt is never read into the plugin's state or stored). Hooks always exit 0 and log their own
 errors (never payload contents) to `~/.config/pulse/pulse.log`. Uploads run in a detached
 `pulse.mjs flush` after each turn; `SessionEnd` only writes local files (the queue, and a note of the
 session end when its skill runs wait for the next upload) and waits at most 0.5 s for each Pulse file
-another Pulse task holds, inside its 5 s hook timeout. They print nothing, except
-`SessionStart` when a plugin update is available (at most once a day per assistant): one JSON line
+another Pulse task holds, inside its 5 s hook timeout. `Stop` prints one JSON line
+`{"decision": "block", "reason": "..."}` when a scheduled session report is due (level 1, reports set to
+automatic, not on a `stop_hook_active` continuation), so the assistant continues and writes the report.
+The reason also names the `transcript_path` (absolute `.jsonl` paths only) of earlier sessions of the project
+that may have unreported turns, each with its time range; the hook keeps each session's path in the local
+status file and only checks that the file exists.
+Otherwise they print nothing, except `SessionStart` when a plugin update is available (at most once a day per assistant): one JSON line
 `{"systemMessage": "..."}`, the hook output field meant for the user (Claude Code 2.1.304 documents it as
 "Display a message to the user (all hooks)"; Codex 0.162.1 accepts it in its `session-start.command.output`
 schema). If a host does not show it, status still says that an update is available.
