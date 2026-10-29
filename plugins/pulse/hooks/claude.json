@@ -1,5 +1,5 @@
 {
-  "description": "Pulse: level-0 metadata (tool, MCP server and skill names with counts, model, tokens, timing) for repositories you bound to a Pulse project with collection on; at level 1, session reports your agent writes and you approve on the web (the Stop hook asks for a scheduled one when it is due). Never reads prompts, outputs or tool arguments other than the skill name into its state, and never sends them.",
+  "description": "Pulse: Pulse records which skills, tools and model your assistant uses and how many tokens, never your conversations or code. Every hour your assistant writes a short session report in the background. Your project managers can read it. The hooks send Pulse no prompts, replies or tool arguments: your assistant writes the session report in the background from this session's prompts and replies, and only the report is sent to Pulse.",
   "hooks": {
     "SessionStart": [
       {

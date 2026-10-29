@@ -25,30 +25,28 @@ export const UPDATE_COMMANDS = {
   claude: {
     label: 'Claude Code',
     command: 'claude plugin marketplace update pulse && claude plugin update pulse@pulse',
-    after: 'then run /reload-plugins or restart Claude Code',
-    autoUpdate: '/plugin → Marketplaces → pulse → Enable auto-update',
+    after: 'Run /reload-plugins or restart Claude Code.',
   },
   codex: {
     label: 'Codex',
     command: 'codex plugin marketplace upgrade pulse',
-    after: 'then start a new Codex session',
+    after: 'Next time Codex starts, accept the Pulse hooks.',
   },
 };
 
-const findUpdateCommands = (host) => (typeof host === 'string' && Object.hasOwn(UPDATE_COMMANDS, host) ? UPDATE_COMMANDS[host] : null);
+export const updateCommandFor = (host) => (typeof host === 'string' && Object.hasOwn(UPDATE_COMMANDS, host) ? UPDATE_COMMANDS[host].command : null);
 
-export function updateLines(host) {
-  const hosts = findUpdateCommands(host) ? [host] : ['claude', 'codex'];
-  const lines = [];
-  for (const h of hosts) {
-    const c = UPDATE_COMMANDS[h];
-    const who = hosts.length > 1 ? `${c.label}: ` : '';
-    lines.push(`${who}run in a terminal: ${c.command} — ${c.after}.`);
-    if (c.autoUpdate) {
-      lines.push(`${hosts.length > 1 ? `${c.label}: turn` : 'Turn'} on auto-update: ${c.autoUpdate}.`);
-    }
+export const UPDATE_COPIED = 'Copied to your clipboard: the update command.';
+
+export function updateLines(host, { copied = false } = {}) {
+  if (!updateCommandFor(host)) {
+    return Object.values(UPDATE_COMMANDS).map((c) => `${c.label}: run in a terminal: ${c.command}, then: ${c.after}`);
   }
-  return lines;
+  const c = UPDATE_COMMANDS[host];
+  return [
+    `Assistant: ask the user "Pulse has an update. Update now?" On yes, run this command in a terminal: ${c.command}. Then tell the user: "${c.after}"`,
+    ...(copied ? [UPDATE_COPIED] : []),
+  ];
 }
 
 export async function notePluginInfo(state, apiUrl, block, now = Date.now()) {
@@ -111,21 +109,18 @@ export function pluginUpdate(state, apiUrl, version = PLUGIN_VERSION) {
   };
 }
 
-export function versionLines(state, apiUrl, host) {
-  const u = pluginUpdate(state, apiUrl);
-  const lines = [`Plugin version: ${u.version}`];
-  if (u.updateAvailable) {
-    const head = `Update available${u.latestVersion ? `: ${u.latestVersion}` : ''}.`;
-    const [first, ...rest] = updateLines(host);
-    lines.push(...(findUpdateCommands(host) ? [`${head} To update, ${first}`, ...rest] : [`${head} To update:`, first, ...rest]));
+export function versionLines(update, host, { copied = false } = {}) {
+  const lines = [`Plugin version: ${update.version}`];
+  if (update.updateAvailable) {
+    lines.push(`Pulse has an update${update.latestVersion ? `: ${update.latestVersion}` : ''}.`, ...updateLines(host, { copied }));
   }
-  if (u.outdated) {
-    lines.push('Uploads are paused until you update: this plugin version is too old for Pulse. Recorded events wait on this computer and upload after the update.');
-    if (u.message) {
-      lines.push(`Pulse says: "${u.message.replace(/"/g, "'")}"`);
+  if (update.outdated) {
+    lines.push('This version is too old for Pulse: nothing is sent until you update. What was recorded waits on this computer.');
+    if (update.message) {
+      lines.push(`Pulse says: "${update.message.replace(/"/g, "'")}"`);
     }
   }
-  return { lines, update: u };
+  return lines;
 }
 
 export async function sessionNotice(state, apiUrl, host, now = Date.now()) {
@@ -139,8 +134,8 @@ export async function sessionNotice(state, apiUrl, host, now = Date.now()) {
   }
   await state.setStatus(apiUrl, (s) => ({ ...s, updateNoticeAt: { ...(s.updateNoticeAt ?? {}), [host]: now } }));
   const head = u.outdated
-    ? `Pulse plugin ${u.version} is too old for Pulse: uploads are paused until you update${u.latestVersion ? ` to ${u.latestVersion}` : ''}.`
-    : `Pulse plugin ${u.latestVersion ?? 'update'} is available (installed: ${u.version}).`;
-  const [first, ...rest] = updateLines(host);
-  return [head, findUpdateCommands(host) ? `To update, ${first}` : `To update: ${first}`, ...rest].join(' ');
+    ? `Pulse ${u.version} is too old: nothing is sent to Pulse until you update.`
+    : `Pulse has an update${u.latestVersion ? `: ${u.latestVersion}` : ''}.`;
+  const command = updateCommandFor(host);
+  return command ? `${head} Ask your assistant to update Pulse, or run in a terminal: ${command}` : head;
 }

@@ -2,7 +2,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 
-import { ApiError, NotSignedIn, heartbeatBody, isProjectGone, isUnknownNotFound, pluginCall } from './api.mjs';
+import { ApiError, NotSignedIn, heartbeatBody, isProjectGone, isReadOnly, isUnknownNotFound, pluginCall } from './api.mjs';
 import { Auth, refreshOutcomeUnknown, revokeOrphans } from './auth.mjs';
 import {
   CLAIM_MARK,
@@ -59,7 +59,7 @@ export const UPLOAD_RUNNING_ERROR = 'busy';
 export const STATE_BUSY_ERROR = 'state_busy';
 const AUTH_UNREADABLE_ERROR = 'auth_file_unreadable';
 const SIGN_IN_CHANGED_ERROR = 'sign_in_changed';
-const BLOCKING_409 = new Set(['collection_off', 'paused', 'excluded', 'not_configured']);
+const READ_ONLY_COLLECTION = { readOnly: true };
 export const REMOTE_MATCH_CHECK_EVERY_MS = 60 * 60 * 1000;
 export const REMOTE_MATCH_RETRY_AFTER_MS = 10 * 60 * 1000;
 
@@ -69,6 +69,10 @@ export async function refreshCollection(state, auth, projectId, now = Date.now()
     await state.cacheCollection(auth.apiUrl, projectId, collection, now);
     return collection;
   } catch (err) {
+    if (isReadOnly(err)) {
+      await state.cacheCollection(auth.apiUrl, projectId, READ_ONLY_COLLECTION, now);
+      return READ_ONLY_COLLECTION;
+    }
     if (isProjectGone(err)) {
       await runUnlessBusy(state, 'removed project not marked', () => state.markProjectStale(auth.apiUrl, projectId, 'not_found'));
       await state.cacheCollection(auth.apiUrl, projectId, null, now);
@@ -76,6 +80,31 @@ export async function refreshCollection(state, auth, projectId, now = Date.now()
     }
     throw err;
   }
+}
+
+export const bindingFor = (apiUrl, ctx, project, now = Date.now()) => ({
+  apiUrl,
+  projectId: project.id,
+  projectName: project.name,
+  projectSlug: project.slug ?? null,
+  kind: ctx.kind,
+  remote: ctx.remoteKey,
+  matched: ctx.kind === 'git' && Boolean(ctx.remote) && project.matched === true,
+  matchCheckedAt: now,
+  boundAt: new Date(now).toISOString(),
+});
+
+async function bindSingleMatch(state, auth, repoKey, now) {
+  const ctx = repoContext(repoKey);
+  if (ctx.kind !== 'git' || ctx.key !== repoKey || !ctx.remote || state.binding(ctx.key)) {
+    return null;
+  }
+  const matched = (await fetchProjects(auth, ctx.remote)).projects.filter((project) => project.matched === true);
+  if (matched.length !== 1) {
+    return null;
+  }
+  const binding = bindingFor(auth.apiUrl, ctx, matched[0], now);
+  return (await state.setBinding(ctx.key, binding)) ? binding.projectId : null;
 }
 
 export async function fetchProjects(auth, remote) {
@@ -329,7 +358,7 @@ function releaseForAnotherServer(home, claim, records, { now, drop }) {
   }
 }
 
-export async function flush(state, { projects = [], provider = null, background = false, now = Date.now() } = {}) {
+export async function flush(state, { projects: requested = [], provider = null, background = false, bindRepo = null, now = Date.now() } = {}) {
   const summary = { sent: 0, duplicates: 0, rejected: 0, dropped: 0, kept: 0, errors: [] };
   const release = await acquireLock(state.file('flush.lock'), { staleMs: UPLOAD_LOCK_STALE_MS, waitMs: background ? 0 : FLUSH_WAIT_MS, home: state.home });
   if (!release) {
@@ -359,6 +388,18 @@ export async function flush(state, { projects = [], provider = null, background 
     }
 
     const shared = authFor(provider);
+    const projects = [...requested];
+    if (bindRepo && shared.signedIn()) {
+      try {
+        const bound = await bindSingleMatch(state, shared, bindRepo, now);
+        if (bound) {
+          projects.push(bound);
+        }
+      } catch (err) {
+        networkFailed ||= transient(err);
+        logError(state.home, 'the project of this folder was not picked by itself; the next session start tries again', err);
+      }
+    }
     for (const projectId of projects) {
       const cached = state.collection(apiUrl, projectId);
       if (shared.signedIn() && (!background || !cached || isCollectionOlderThan(cached, COLLECTION_REFRESH_AFTER_MS, now))) {
@@ -584,14 +625,10 @@ async function flushFile(state, claimed, { apiUrl, authFor, now, holdBack, summa
       out.stateBusy = true;
       return keep(STATE_BUSY_ERROR);
     }
-    if (err instanceof ApiError && err.status === 409 && BLOCKING_409.has(err.code)) {
+    if (isReadOnly(err)) {
       drop(records.length);
       removeClaim(state.home, claim);
-      try {
-        await refreshCollection(state, auth, projectId, now);
-      } catch (refreshError) {
-        logError(state.home, 'collection refresh after a refused upload failed; the next upload refreshes it', refreshError);
-      }
+      await state.cacheCollection(apiUrl, projectId, READ_ONLY_COLLECTION, now);
       dropSpool(state, { apiUrl, projectId });
       return out;
     }

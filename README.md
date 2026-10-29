@@ -1,6 +1,6 @@
 # Pulse plugin
 
-The Pulse plugin connects Claude Code and Codex to Pulse: choose the Pulse project for each repository, decide what Pulse may collect, and load the skills added to your Pulse projects.
+The Pulse plugin connects Claude Code and Codex to Pulse: one sign-in, and the folder with each project's code is connected to its Pulse project. Pulse records which skills, tools and model your assistant uses and how many tokens, never your conversations or code. Every hour your assistant writes a short session report in the background. Your project managers can read it. Also loads your project's Pulse skills and the Pulse tools for daily updates and changelogs.
 
 ## Install
 

@@ -1,7 +1,7 @@
 {
   "name": "pulse",
-  "version": "0.5.1",
-  "description": "Connect Codex to Pulse: choose the Pulse project for each repository, decide what Pulse may collect (off by default: level-0 metadata, or level-1 session reports you approve on the web), load the skills added to your Pulse projects, and use the Pulse tools for daily updates and changelogs with the same sign-in.",
+  "version": "0.6.0",
+  "description": "Connect Codex to Pulse: one sign-in, and the folder with each project's code is connected to its Pulse project. Pulse records which skills, tools and model your assistant uses and how many tokens, never your conversations or code. Every hour your assistant writes a short session report in the background. Your project managers can read it. Also loads your project's Pulse skills and the Pulse tools for daily updates and changelogs.",
   "author": { "name": "Paralect", "url": "https://paralect.ai" },
   "homepage": "https://paralect.ai",
   "repository": "https://github.com/prlct/pulse-plugin",
@@ -12,12 +12,12 @@
   "mcpServers": "./.codex-mcp.json",
   "interface": {
     "displayName": "Pulse",
-    "shortDescription": "Bind repositories to Pulse projects and control what Pulse may collect",
-    "longDescription": "Signs in to Pulse once per computer, binds each repository to a Pulse project you choose, and records level-0 metadata (tool, MCP server and skill names with counts, model, tokens, timing) only for projects where you turned it on. At level 1 your agent also writes session reports, saved as private drafts you approve on the Pulse website. Prompts, conversation and tool arguments are never collected. Loads the skills added to your Pulse projects (verified, cached locally). Includes the Pulse MCP tools for daily updates and changelogs: no separate connector needed.",
+    "shortDescription": "Connect the folder with your project's code to Pulse",
+    "longDescription": "Signs in to Pulse once per computer and connects the folder with each project's code to its Pulse project. Pulse records which skills, tools and model your assistant uses and how many tokens, never your conversations or code. Every hour your assistant writes a short session report in the background. Your project managers can read it. Loads the skills of your Pulse projects and includes the Pulse tools for daily updates and changelogs: no separate connector needed.",
     "developerName": "Paralect",
     "category": "Productivity",
     "capabilities": ["Interactive", "Read", "Write"],
     "websiteURL": "https://paralect.ai",
-    "defaultPrompt": "Show my Pulse status for this repository."
+    "defaultPrompt": "Show my Pulse status for this folder."
   }
 }

@@ -161,7 +161,7 @@ export function safeBranch(branch) {
   return value;
 }
 
-export function shortRepoName(normalized) {
+function shortRepoName(normalized) {
   if (!normalized) {
     return null;
   }

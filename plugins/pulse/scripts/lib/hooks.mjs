@@ -7,25 +7,23 @@ import { isHeartbeatDue } from './flush.mjs';
 import { repoContext } from './git.mjs';
 import { attachSkillRun, noteEndedSession, settleRuns, takeSessionRuns } from './skills.mjs';
 import { sessionNotice } from './updates.mjs';
+import { REPORT_WRITER_ENV } from './writer.mjs';
 import {
   COLLECTION_REFRESH_AFTER_MS,
   SESSION_MAX_AGE_MS,
   bindingStatus,
-  describeEarlierSession,
-  earlierSessionsIn,
   isCollectionOlderThan,
   isRecordingStateUnusable,
   isSignedIn,
   recentPrompts,
   recordingAllowed,
-  reportWindowStart,
   runUnlessBusy,
   transcriptPathOrNull,
+  unreportedSessions,
 } from './state.mjs';
 import { claudeUsage, codexBaseline, codexUsage, readNewLines } from './transcript.mjs';
 import {
   appendLine,
-  cmdRef,
   countKey,
   deriveSessionFileKey,
   fileSizeOrZero,
@@ -33,7 +31,6 @@ import {
   homeDir,
   isMissingPath,
   isoNow,
-  localDateTime,
   logError,
   modifiedAtOrNull,
   parseJson,
@@ -51,30 +48,11 @@ const EMITTED_MAX = 64;
 const REFRESH_REQUEST_EVERY_MS = 30_000;
 const REGISTER_REQUEST_EVERY_MS = 10 * 60 * 1000;
 const HEARTBEAT_REQUEST_EVERY_MS = 10 * 60 * 1000;
-const REFRESHABLE_REASONS = new Set(['unknown_collection', 'collection_blocked', 'block_not_cached']);
+const REFRESHABLE_REASONS = new Set(['unknown_collection', 'read_only']);
 export const SESSION_END_LOCK_WAIT_MS = 500;
+const REPORT_STATE_WAIT_MS = SESSION_END_LOCK_WAIT_MS;
 const MS_PER_MINUTE = 60_000;
-function earlierSessionsNote({ start, sessions }) {
-  if (sessions.length === 0) {
-    return '';
-  }
-  const transcripts = sessions.map(([, session]) => describeEarlierSession(session, start)).join('; ');
-  return `Earlier sessions in this project may have unreported work. Before deciding, in each transcript read only the user prompts and assistant replies in the range given next to it (skip tool calls and results) and include that work: ${transcripts}. `;
-}
-
-function reportPrompt(collection, host, earlier) {
-  const start = reportWindowStart(collection);
-  const window = start ? `Cover only work after ${localDateTime(start)} (local time), never work from while collection was paused. ` : '';
-  const minutes = collection.report?.intervalMinutes;
-  const every = Number.isFinite(minutes) && minutes > 0 ? ` (every ${minutes} min)` : '';
-  const earlierScope = earlier.sessions.length > 0 ? ', in this session or in the earlier sessions above' : '';
-  return (
-    `Pulse automatic session report${every}: your assistant writes it now and saves it as a private draft for you to review in Pulse. ` +
-    `Assistant: run the Pulse report skill (${cmdRef(host, 'report')}) and send the report with trigger "scheduled". ` +
-    `${window}${earlierSessionsNote(earlier)}` +
-    `If there was no real work in that time${earlierScope} (only chat, thanks or nothing new), send nothing and say so in one line.`
-  );
-}
+const DEFAULT_REPORT_INTERVAL_MINUTES = 60;
 
 const str = (v) => (typeof v === 'string' && v.length > 0 ? v : null);
 
@@ -92,7 +70,6 @@ export function pickPayload(payload) {
     skill,
     expansionType: str(p.expansion_type),
     commandName: str(p.command_name),
-    stopHookActive: p.stop_hook_active === true,
   };
 }
 
@@ -158,15 +135,19 @@ function drainLog(state, file) {
 
 export const SPAWN_FAILURE_LOG_EVERY_MS = 10 * 60 * 1000;
 
-export function spawnFlush(args = [], env = process.env, now = Date.now()) {
+function spawnPulseTask(args, env, now) {
   try {
-    spawnDetached(process.execPath, [SCRIPT, 'flush', '--background', ...args], env).unref();
+    spawnDetached(process.execPath, [SCRIPT, ...args], env).unref();
     return true;
   } catch (err) {
     logSpawnFailureThrottled(homeDir(env), err, now);
     return false;
   }
 }
+
+export const spawnFlush = (args = [], env = process.env, now = Date.now()) => spawnPulseTask(['flush', '--background', ...args], env, now);
+
+const spawnReportWriter = (args, env = process.env, now = Date.now()) => spawnPulseTask(['report-writer', ...args], env, now);
 
 function logSpawnFailureThrottled(home, err, now) {
   const marker = path.join(home, 'flush-spawn-failed.json');
@@ -177,9 +158,9 @@ function logSpawnFailureThrottled(home, err, now) {
   try {
     writeJson(marker, { at: now });
   } catch (markerError) {
-    return logError(home, 'background upload could not start; the next hook tries again (throttle marker not saved)', markerError);
+    return logError(home, 'a background Pulse task could not start; the next hook tries again (throttle marker not saved)', markerError);
   }
-  return logError(home, 'background upload could not start; the next hook tries again', err);
+  return logError(home, 'a background Pulse task could not start; the next hook tries again', err);
 }
 
 function noteCodexHookRunOrLog(state, now) {
@@ -220,7 +201,7 @@ const isEmpty = (counts) =>
 
 const sessionTurnKey = (session) => `n${session.turns}.${session.startedAt}`;
 
-export async function runHook(host, eventName, payload, { state, now = Date.now(), flush = spawnFlush } = {}) {
+export async function runHook(host, eventName, payload, { state, now = Date.now(), flush = spawnFlush, startWriter = spawnReportWriter } = {}) {
   const provider = findProvider(host);
   if (!provider) {
     return undefined;
@@ -233,7 +214,7 @@ export async function runHook(host, eventName, payload, { state, now = Date.now(
     hasSpawnedFlush = true;
     return flush(args);
   };
-  const result = await handleHookEvent(provider, host, eventName, payload, { state, now, flush: spawnTrackedFlush });
+  const result = await handleHookEvent(provider, host, eventName, payload, { state, now, flush: spawnTrackedFlush, startWriter });
   if (eventName !== 'SessionEnd' && !hasSpawnedFlush) {
     try {
       await requestHeartbeatFlush(state, { providerId: provider.id, now, flush });
@@ -244,7 +225,7 @@ export async function runHook(host, eventName, payload, { state, now = Date.now(
   return result;
 }
 
-async function handleHookEvent(provider, host, eventName, payload, { state, now, flush }) {
+async function handleHookEvent(provider, host, eventName, payload, { state, now, flush, startWriter }) {
   const fields = pickPayload(payload);
   if (!fields.sessionId) {
     return;
@@ -283,8 +264,9 @@ async function handleHookEvent(provider, host, eventName, payload, { state, now,
         state.setStatus(apiUrl, (s) => ({ ...s, registerRequestedAt: { ...(s.registerRequestedAt ?? {}), [providerId]: now } })),
       );
     }
-    if (spoolPending(state, apiUrl, now) || stale || register || record?.orphanGrants?.length > 0) {
-      flush(flushArgs(bound.ok ? bound.binding.projectId : null));
+    const isAutoBindDue = bound.reason === 'unbound' && ctx.kind === 'git' && Boolean(ctx.remote);
+    if (spoolPending(state, apiUrl, now) || stale || register || isAutoBindDue || record?.orphanGrants?.length > 0) {
+      flush([...flushArgs(bound.ok ? bound.binding.projectId : null), ...(isAutoBindDue ? ['--repo', ctx.key] : [])]);
     }
     pruneSessions(state, now);
     const notice = signedIn ? await runUnlessBusy(state, 'update notice skipped', () => sessionNotice(state, apiUrl, host, now)) : null;
@@ -311,7 +293,7 @@ async function handleHookEvent(provider, host, eventName, payload, { state, now,
         attachSkillRun(state, { providerId, sessionId: fields.sessionId, toolUseId: fields.toolUseId, repoKey: ctx.key, now }),
       );
     }
-    const allowed = recordingAllowed(state, ctx, apiUrl, now);
+    const allowed = recordingAllowed(state, ctx, apiUrl);
     await requestRefresh(state, allowed, { apiUrl, now, flush, flushArgs });
     if (!allowed.ok) {
       return;
@@ -342,7 +324,7 @@ async function handleHookEvent(provider, host, eventName, payload, { state, now,
     leaveRunsForNextUpload(state, describeEndedSession());
     return;
   }
-  const allowed = recordingAllowed(state, ctx, apiUrl, now);
+  const allowed = recordingAllowed(state, ctx, apiUrl);
   if (!allowed.ok && isRecordingStateUnusable(state)) {
     if (eventName === 'SessionEnd') {
       logError(state.home, 'the last turn of this session is not recorded: a Pulse file needed to decide it could not be read');
@@ -354,6 +336,7 @@ async function handleHookEvent(provider, host, eventName, payload, { state, now,
   }
   const counts = drainLog(state, files.log);
   const sess = state.read(files.name, null);
+  const turnStartedAt = sess?.lastStopAt ?? sess?.startedAt ?? null;
   let tokens = null;
   let model = fields.model ?? sess?.model ?? null;
   let startedAt = null;
@@ -431,10 +414,26 @@ async function handleHookEvent(provider, host, eventName, payload, { state, now,
       }),
   );
   const skillEvents = runs?.length > 0 ? await settleRuns(state, runs, { end: isSessionEnd ? 'session_end' : 'stop', now, salt, ...lockWait }) : 0;
+  const reportContext = allowed.ok
+    ? {
+        apiUrl,
+        host,
+        projectId: allowed.binding.projectId,
+        sessionKey: `${allowed.binding.projectId}:${deriveSessionFileKey(providerId, fields.sessionId)}`,
+        transcriptPath: transcriptPathOrNull(fields.transcriptPath),
+        turnStartedAt,
+        isSessionEnd,
+        now,
+        startWriter,
+      }
+    : null;
 
   if (isSessionEnd) {
     if (runs === null) {
       leaveRunsForNextUpload(state, describeEndedSession());
+    }
+    if (reportContext) {
+      await startReportWriterIfDue(state, reportContext);
     }
     removeSessionFiles(state, files);
     return;
@@ -447,86 +446,49 @@ async function handleHookEvent(provider, host, eventName, payload, { state, now,
   } else {
     await requestRefresh(state, allowed, { apiUrl, now, flush, flushArgs });
   }
-  if (allowed.ok) {
-    const promptKey = `${allowed.binding.projectId}:${deriveSessionFileKey(providerId, fields.sessionId)}`;
-    return promptReportIfDue(state, {
-      apiUrl,
-      host,
-      projectId: allowed.binding.projectId,
-      promptKey,
-      transcriptPath: transcriptPathOrNull(fields.transcriptPath),
-      isContinuation: fields.stopHookActive,
-      now,
-    });
+  if (reportContext) {
+    await startReportWriterIfDue(state, reportContext);
   }
 }
 
-const isReportDue = (report, promptedAt, now) =>
-  Date.parse(report.nextReportAt) <= now && now - promptedAt >= report.intervalMinutes * MS_PER_MINUTE;
+const reportIntervalMs = (report) =>
+  (Number.isFinite(report?.intervalMinutes) && report.intervalMinutes > 0 ? report.intervalMinutes : DEFAULT_REPORT_INTERVAL_MINUTES) * MS_PER_MINUTE;
 
-const latestPromptIn = (prompts, projectId) =>
-  Math.max(
-    0,
-    ...Object.entries(prompts)
-      .filter(([key]) => key.startsWith(`${projectId}:`))
-      .map(([, prompt]) => prompt?.promptedAt ?? 0),
-  );
+const isReportDue = (report, now) => Date.parse(report?.nextReportAt) <= now;
 
-function markListed(prompts, prompting) {
-  if (!Array.isArray(prompting?.listedKeys) || !Number.isFinite(prompting.promptedAt)) {
-    return {};
-  }
-  return Object.fromEntries(
-    prompting.listedKeys
-      .filter((key) => typeof key === 'string' && Object.hasOwn(prompts, key))
-      .map((key) => [key, { ...prompts[key], listedAt: prompting.promptedAt }]),
-  );
+const writerStartedAt = (status, projectId) => {
+  const startedAt = status.reportWriterStartedAt?.[projectId];
+  return Number.isFinite(startedAt) ? startedAt : 0;
+};
+
+function noteSessionWork(prompts, { sessionKey, host, transcriptPath, turnStartedAt, now }) {
+  const previous = prompts[sessionKey];
+  const transcript = transcriptPath ?? transcriptPathOrNull(previous?.transcriptPath);
+  const firstSeenAt = Number.isFinite(previous?.firstSeenAt) ? previous.firstSeenAt : turnStartedAt;
+  return { ...prompts, [sessionKey]: { seenAt: now, ...(Number.isFinite(firstSeenAt) ? { firstSeenAt } : {}), host, transcriptPath: transcript } };
 }
 
-function nextPromptEntry(previous, { host, transcriptPath, promptedAt, isDue, isReportContinuation, listedKeys, now }) {
-  return {
-    promptedAt: isDue ? now : promptedAt,
-    seenAt: isReportContinuation && Number.isFinite(previous.seenAt) ? previous.seenAt : now,
-    host,
-    transcriptPath: transcriptPath ?? transcriptPathOrNull(previous?.transcriptPath),
-    isReportAsked: isDue,
-    listedKeys,
-    ...(isReportContinuation && Number.isFinite(previous.promptedAt) ? { listedAt: previous.promptedAt } : {}),
-  };
-}
-
-async function promptReportIfDue(state, { apiUrl, host, projectId, promptKey, transcriptPath, isContinuation, now }) {
+async function startReportWriterIfDue(state, { apiUrl, host, projectId, sessionKey, transcriptPath, turnStartedAt, isSessionEnd, now, startWriter }) {
   const collection = state.collection(apiUrl, projectId)?.state;
-  if (collection?.level !== 'summary') {
-    return undefined;
-  }
-  const isScheduled = collection.report?.mode === 'scheduled';
-  let isDue = false;
-  let earlier = null;
-  const saved = await runUnlessBusy(
-    state,
-    'scheduled report prompt state not saved; no prompt this turn',
-    async () => {
-      await state.setStatus(apiUrl, (s) => {
+  let isStarting = false;
+  await runUnlessBusy(state, 'session report start not saved; no report this turn', () =>
+    state.setStatus(
+      apiUrl,
+      (s) => {
         const prompts = recentPrompts(s.reportPrompts ?? {}, now);
-        const promptedAt = latestPromptIn(prompts, projectId);
-        const previous = prompts[promptKey];
-        const isReportContinuation = isContinuation && previous?.isReportAsked === true;
-        isDue = isScheduled && !isContinuation && isReportDue(collection.report, promptedAt, now);
-        earlier = isDue ? earlierSessionsIn(s, { collection, projectId, exceptKey: promptKey, now }) : null;
-        const listedKeys = earlier?.sessions.map(([key]) => key) ?? [];
-        const entry = nextPromptEntry(previous, { host, transcriptPath, promptedAt, isDue, isReportContinuation, listedKeys, now });
-        const listed = isReportContinuation ? markListed(prompts, previous) : {};
-        return { ...s, reportPrompts: { ...prompts, ...listed, [promptKey]: entry } };
-      });
-      return true;
-    },
-    false,
+        const next = { ...s, reportPrompts: isSessionEnd ? prompts : noteSessionWork(prompts, { sessionKey, host, transcriptPath, turnStartedAt, now }) };
+        isStarting =
+          (isSessionEnd || isReportDue(collection?.report, now)) &&
+          now - writerStartedAt(s, projectId) >= reportIntervalMs(collection?.report) &&
+          unreportedSessions(next, { collection, projectId, now }).sessions.length > 0;
+        return isStarting ? { ...next, reportWriterStartedAt: { ...(s.reportWriterStartedAt ?? {}), [projectId]: now } } : next;
+      },
+      { waitMs: REPORT_STATE_WAIT_MS },
+    ),
   );
-  if (!saved || !isDue) {
-    return undefined;
+  if (isStarting) {
+    startWriter(['--project', projectId, '--host', host]);
   }
-  return { decision: 'block', reason: reportPrompt(collection, host, earlier) };
 }
 
 function leaveRunsForNextUpload(state, ended) {
@@ -583,6 +545,9 @@ function pruneSessions(state, now) {
 }
 
 export async function hookMain(host, eventName, { state, stdin = process.stdin, stdout = process.stdout } = {}) {
+  if (state.env[REPORT_WRITER_ENV] === '1') {
+    return;
+  }
   try {
     const raw = await readStdin(stdin, state.home);
     const parsed = parseJson(raw);
@@ -590,9 +555,6 @@ export async function hookMain(host, eventName, { state, stdin = process.stdin, 
     const out = await runHook(host, eventName, payload, { state });
     if (out?.systemMessage) {
       stdout.write(`${JSON.stringify({ systemMessage: out.systemMessage })}\n`);
-    }
-    if (out?.decision) {
-      stdout.write(`${JSON.stringify({ decision: out.decision, reason: out.reason })}\n`);
     }
   } catch (err) {
     logError(state.home, `hook ${host} ${eventName} failed`, { code: err?.code ?? err?.name ?? 'error' });

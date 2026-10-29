@@ -30,6 +30,8 @@ export const isProjectGone = (err) => err instanceof ApiError && err.status === 
 
 export const isUnknownNotFound = (err) => err instanceof ApiError && err.status === 404 && err.code !== PROJECT_NOT_FOUND;
 
+export const isReadOnly = (err) => err instanceof ApiError && err.status === 403 && err.code === 'read_only';
+
 export async function request(
   url,
   { method = 'GET', token, json, form, accept = 'application/json', timeoutMs = REQUEST_TIMEOUT_MS, maxBytes = 0 } = {},
@@ -178,29 +180,14 @@ export async function discover(apiUrl) {
   throw new ApiError(404, { error: 'no_metadata', error_description: `No OAuth metadata at ${base.origin}` });
 }
 
-const API_HOST_PREFIX = 'api.';
-
-function isOnApiSite(link, api) {
-  if (LOOPBACK.has(link.hostname) || LOOPBACK.has(api.hostname)) {
-    return LOOPBACK.has(link.hostname) && LOOPBACK.has(api.hostname);
-  }
-  return link.hostname === api.hostname || api.hostname === `${API_HOST_PREFIX}${link.hostname}`;
-}
-
-export function webLinkOnApiSite(value, apiUrl) {
-  if (!safeBrowserUrl(value, { allowQuery: true })) {
-    return null;
-  }
-  const link = new URL(value);
-  return isOnApiSite(link, new URL(apiUrl)) ? link.href : null;
-}
-
 const grantReplaced = (res) =>
   new ApiError(res.status, { error: 'grant_replaced', error_description: 'The Pulse sign-in changed while this request ran' });
 
 const routeLabelOf = (path) => path.split('?')[0].replace(/[0-9a-f-]{36}/g, ':id');
 
-const heartbeatBody = (auth) => ({ provider: auth.providerId, pluginVersion: PLUGIN_VERSION });
+const deviceTimeZone = () => Intl.DateTimeFormat().resolvedOptions().timeZone;
+
+const heartbeatBody = (auth) => ({ provider: auth.providerId, pluginVersion: PLUGIN_VERSION, timeZone: deviceTimeZone() });
 
 async function noteOutdatedOrLog(auth, json) {
   try {
@@ -299,6 +286,11 @@ export async function mcpCall(auth, message, { timeoutMs = MCP_TIMEOUT_MS } = {}
 
 export async function listSkills(auth, projectId) {
   const result = await pluginCall(auth, 'GET', `/projects/${encodeURIComponent(projectId)}/skills`, undefined, { maxBytes: SKILL_LIST_MAX_BYTES });
+  return Array.isArray(result?.skills) ? result.skills : [];
+}
+
+export async function listSkillLibrary(auth, projectId) {
+  const result = await pluginCall(auth, 'GET', `/projects/${encodeURIComponent(projectId)}/skills?all=1`, undefined, { maxBytes: SKILL_LIST_MAX_BYTES });
   return Array.isArray(result?.skills) ? result.skills : [];
 }
 

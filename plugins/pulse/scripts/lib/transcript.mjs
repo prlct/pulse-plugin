@@ -156,3 +156,135 @@ export function codexUsage(lines, baseline) {
     startedAt: firstTimestamp(lines),
   };
 }
+
+const AGENTS_FILE_HEADING = '# AGENTS.md instructions';
+
+function isOnlyTaggedBlocks(text) {
+  let at = 0;
+  while (at < text.length) {
+    if (text[at] !== '<') {
+      return false;
+    }
+    const openEnd = text.indexOf('>', at);
+    const name = openEnd === -1 ? '' : text.slice(at + 1, openEnd).split(/[\s/]/)[0];
+    const close = name ? text.indexOf(`</${name}>`, openEnd) : -1;
+    if (close === -1) {
+      return false;
+    }
+    at = close + name.length + 3;
+    while (at < text.length && /\s/.test(text[at])) {
+      at += 1;
+    }
+  }
+  return true;
+}
+
+const isInjectedContext = (text) => {
+  const trimmed = text.trim();
+  return trimmed.startsWith(AGENTS_FILE_HEADING) || isOnlyTaggedBlocks(trimmed);
+};
+
+const keepPersonText = (text) => !isInjectedContext(text);
+
+const textOfBlocks = (content, keep = () => true) => {
+  const blocks = typeof content === 'string' ? [{ type: 'text', text: content }] : content;
+  if (!Array.isArray(blocks)) {
+    return '';
+  }
+  return blocks
+    .filter((block) => block?.type === 'text' && typeof block.text === 'string' && keep(block.text))
+    .map((block) => block.text)
+    .join('\n');
+};
+
+const PERSON = 'USER';
+const ASSISTANT = 'ASSISTANT';
+
+const SKIPPED_MESSAGE = { role: null, text: '' };
+const CLAUDE_HIDDEN_FLAGS = ['isCompactSummary', 'isVisibleInTranscriptOnly', 'isSidechain'];
+
+const isClaudeConversation = (line) => (line?.type === 'user' || line?.type === 'assistant') && line.isMeta !== true;
+
+function claudeEntry(line) {
+  if (isClaudeConversation(line) && CLAUDE_HIDDEN_FLAGS.some((flag) => line[flag] === true)) {
+    return SKIPPED_MESSAGE;
+  }
+  const content = line?.message?.content;
+  if (typeof content !== 'string' && !Array.isArray(content)) {
+    return null;
+  }
+  if (line.type === 'user' && line.isMeta !== true && line.message.role === 'user') {
+    return { role: PERSON, text: textOfBlocks(content, keepPersonText) };
+  }
+  if (line.type === 'assistant') {
+    return { role: ASSISTANT, text: textOfBlocks(content) };
+  }
+  return null;
+}
+
+const CODEX_PARTS = new Map([
+  ['user', { role: PERSON, type: 'input_text' }],
+  ['assistant', { role: ASSISTANT, type: 'output_text' }],
+]);
+const isCodexConversation = (line) => line?.type === 'response_item' && line.payload?.type === 'message';
+const CODEX_SKIPPED_ROLES = new Set(['developer', 'system']);
+
+function codexEntry(line) {
+  const payload = isCodexConversation(line) ? line.payload : null;
+  if (payload && CODEX_SKIPPED_ROLES.has(payload.role)) {
+    return SKIPPED_MESSAGE;
+  }
+  const part = payload ? CODEX_PARTS.get(payload.role) : undefined;
+  if (!part || !Array.isArray(payload.content)) {
+    return null;
+  }
+  const texts = payload.content
+    .filter((item) => item?.type === part.type && typeof item.text === 'string' && (part.role !== PERSON || keepPersonText(item.text)))
+    .map((item) => item.text);
+  return { role: part.role, text: texts.join('\n') };
+}
+
+const sumWindowTokens = (tokens) => (tokens ? tokens.input + tokens.output + tokens.cacheWrite : 0);
+
+function readTranscriptTail(file) {
+  return readNewLines(file, Math.max(0, fileSizeOrZero(file) - MAX_READ_BYTES)).lines;
+}
+
+function hostVersionOf(host, line) {
+  const codexVersion = line?.type === 'session_meta' ? line.payload?.cli_version : undefined;
+  const version = host === 'codex' ? codexVersion : line?.version;
+  return typeof version === 'string' && /^[\w.+-]{1,40}$/.test(version) ? version : null;
+}
+
+export function readSessionWindow(host, file, { from, to }) {
+  const before = [];
+  const inside = [];
+  const entries = [];
+  const entryOf = host === 'codex' ? codexEntry : claudeEntry;
+  const isConversation = host === 'codex' ? isCodexConversation : isClaudeConversation;
+  let messages = 0;
+  let conversation = 0;
+  let hostVersion = null;
+  for (const line of readTranscriptTail(file)) {
+    const parsed = parse(line);
+    hostVersion = hostVersionOf(host, parsed) ?? hostVersion;
+    const at = Date.parse(parsed?.timestamp);
+    if (!Number.isFinite(at) || at > to) {
+      continue;
+    }
+    if (at <= from) {
+      before.push(line);
+      continue;
+    }
+    inside.push(line);
+    conversation += isConversation(parsed) ? 1 : 0;
+    const entry = entryOf(parsed);
+    messages += entry ? 1 : 0;
+    if (entry?.text.trim()) {
+      entries.push({ at, ...entry });
+    }
+  }
+  const tokens = sumWindowTokens(host === 'codex' ? codexUsage(inside, codexUsage(before, null).baseline).tokens : claudeUsage(inside).tokens);
+  const isUnreadable = messages === 0 && (tokens > 0 || conversation > 0);
+  return { entries, tokens, isUnreadable, hostVersion };
+}

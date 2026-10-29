@@ -9,13 +9,11 @@ import {
   hasUnsafeForOneLine,
   homeDir,
   isUnreadablePath,
-  isoNow,
   logError,
   modifiedAtOrNull,
   pastTimeOrNull,
   readJson,
   reportUnrestrictedDirs,
-  sha256,
   urlOrNull,
   writeJson,
 } from './util.mjs';
@@ -43,8 +41,6 @@ const CRITICAL_WAIT_MS = 15_000;
 const STATE_LOCK_STALE_MS = 10_000;
 const AUTH_LOCK_STALE_MS = 30_000;
 const STATE_BUSY_CODE = 'EBUSYSTATE';
-export const LOCAL_COPY = { saved: 'saved', blockedByMarker: 'blocked_by_marker', outdated: 'outdated' };
-const BLOCK_MARKERS_DIR = 'collection-blocks';
 
 const reportedUnreadable = new Set();
 
@@ -260,7 +256,7 @@ export class State {
   }
 
   async setBinding(key, value) {
-    await this.update(REPOS_FILE, (all) => {
+    const saved = await this.updateIfReadable(REPOS_FILE, (all) => {
       if (value === null) {
         delete all[key];
       } else {
@@ -268,6 +264,7 @@ export class State {
       }
       return all;
     });
+    return saved !== null;
   }
 
   async setRemoteMatch(key, expected, patch) {
@@ -313,79 +310,10 @@ export class State {
     return all[key];
   }
 
-  async blockCollection(apiUrl, projectId, collectionState, now = Date.now(), { waitMs = STATE_WAIT_MS } = {}) {
-    await this.setCollection(apiUrl, projectId, (c) => ({ ...c, state: collectionState, fetchedAt: now }), { waitMs });
-  }
-
   async cacheCollection(apiUrl, projectId, collectionState, now = Date.now()) {
-    if (collectionAllows(collectionState)) {
-      return runUnlessBusy(
-        this,
-        'collection choice not cached',
-        async () => {
-          let kept = false;
-          await this.setCollection(apiUrl, projectId, (c) => {
-            kept = hasNewerValidFetch(c, now);
-            return kept ? c : { ...c, state: collectionState, fetchedAt: now };
-          });
-          return kept ? LOCAL_COPY.outdated : LOCAL_COPY.saved;
-        },
-        LOCAL_COPY.outdated,
-      );
-    }
-    const marked = this.markBlocked(apiUrl, projectId, this.collection(apiUrl, projectId));
-    try {
-      await this.blockCollection(apiUrl, projectId, collectionState, now, { waitMs: CRITICAL_WAIT_MS });
-      return LOCAL_COPY.saved;
-    } catch (err) {
-      if (!isStateBusy(err)) {
-        throw err;
-      }
-      logError(
-        this.home,
-        marked
-          ? 'collection block not cached: the file is locked by another Pulse task; the block marker stops recording instead'
-          : 'collection block not cached and no block marker saved: this computer may record until it reads the choice again',
-        err,
-      );
-      return marked ? LOCAL_COPY.blockedByMarker : LOCAL_COPY.outdated;
-    }
-  }
-
-  markBlocked(apiUrl, projectId, cached) {
-    try {
-      const now = Date.now();
-      writeJson(this.blockMarkerFile(apiUrl, projectId), {
-        at: Math.max(now, (validFetchedAt(cached) ?? 0) + 1),
-        overrides: Number.isFinite(cached?.fetchedAt) ? cached.fetchedAt : null,
-      });
-      return true;
-    } catch (err) {
-      logError(this.home, 'collection block marker not saved; the local collection copy alone stops recording', err);
-      return false;
-    }
-  }
-
-  blockMarkerFile(apiUrl, projectId) {
-    return this.file(path.join(BLOCK_MARKERS_DIR, `${sha256(`${apiUrl}|${projectId}`).slice(0, 24)}.json`));
-  }
-
-  blockMarker(apiUrl, projectId) {
-    const file = this.blockMarkerFile(apiUrl, projectId);
-    let damaged = false;
-    const marker = readJson(file, null, {
-      onInvalid: () => {
-        damaged = true;
-      },
-      onUnreadable: (err) => {
-        damaged = true;
-        this.noteUnreadable(path.relative(this.home, file), err);
-      },
-    });
-    if (damaged) {
-      return { at: Number.POSITIVE_INFINITY, overrides: null };
-    }
-    return { at: Number.isFinite(marker?.at) ? marker.at : 0, overrides: Number.isFinite(marker?.overrides) ? marker.overrides : null };
+    await runUnlessBusy(this, 'collection not cached', () =>
+      this.setCollection(apiUrl, projectId, (c) => (hasNewerValidFetch(c, now) ? c : { ...c, state: collectionState, fetchedAt: now })),
+    );
   }
 
   codexHookRuns() {
@@ -557,9 +485,7 @@ export const isRecordingStateUnusable = (state) => RECORDING_STATE_FILES.some((n
 
 export const isSignedIn = (record) => Boolean(record && !record.needsSignIn && (record.refreshToken || record.accessToken));
 
-const RECORDING_LEVELS = new Set(['metadata', 'summary']);
-
-export function reportWindowStart(collection) {
+function reportWindowStart(collection) {
   if (collection?.report && Object.hasOwn(collection.report, 'windowStartAt')) {
     return Date.parse(collection.report.windowStartAt) || null;
   }
@@ -568,7 +494,7 @@ export function reportWindowStart(collection) {
 }
 
 export const SESSION_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
-const EARLIER_SESSIONS_MAX = 5;
+const UNREPORTED_SESSIONS_MAX = 5;
 
 export const recentPrompts = (prompts, now) =>
   Object.fromEntries(Object.entries(prompts).filter(([, prompt]) => now - (prompt?.seenAt ?? 0) <= SESSION_MAX_AGE_MS));
@@ -579,8 +505,6 @@ export const transcriptPathOrNull = (file) =>
   typeof file === 'string' && path.isAbsolute(file) && file.endsWith(TRANSCRIPT_EXTENSION) && !hasUnsafeForOneLine(file) ? file : null;
 
 const hasTranscriptFile = (session) => modifiedAtOrNull(session.transcriptPath) !== null;
-
-const hasWorkSinceListed = (session) => !Number.isFinite(session.listedAt) || session.seenAt > session.listedAt;
 
 const isDateTime = (ms) => typeof ms === 'number' && Number.isFinite(new Date(ms).getTime());
 
@@ -597,27 +521,24 @@ const isUnreportedSince = (session, since) =>
   session.seenAt > since &&
   findProvider(session.host) !== null &&
   transcriptPathOrNull(session.transcriptPath) !== null &&
-  hasWorkSinceListed(session) &&
   hasTranscriptFile(session);
 
-export function earlierSessionsIn(status, { collection, projectId, exceptKey = null, now }) {
+export function unreportedSessions(status, { collection, projectId, now }) {
   const start = catchUpStart(collection, status);
   if (start === null) {
     return { start, sessions: [] };
   }
   const sessions = Object.entries(recentPrompts(status.reportPrompts ?? {}, now))
-    .filter(([key, session]) => key !== exceptKey && key.startsWith(`${projectId}:`) && isUnreportedSince(session, start))
+    .filter(([key, session]) => key.startsWith(`${projectId}:`) && isUnreportedSince(session, start))
     .sort(([, a], [, b]) => b.seenAt - a.seenAt)
-    .slice(0, EARLIER_SESSIONS_MAX);
+    .slice(0, UNREPORTED_SESSIONS_MAX)
+    .map(([, session]) => session);
   return { start, sessions };
 }
 
-export const describeEarlierSession = (session, start) =>
-  `${findProvider(session.host).label} ${JSON.stringify(session.transcriptPath)} (entries from ${isoNow(start)} to ${isoNow(session.seenAt)})`;
+export const isReadOnlyCollection = (state) => state?.readOnly === true;
 
-export function collectionAllows(state) {
-  return Boolean(state && state.configured && RECORDING_LEVELS.has(state.level) && !state.paused && !state.excluded);
-}
+export const collectionAllows = (state) => Boolean(state) && !isReadOnlyCollection(state);
 
 export function bindingStatus(state, ctx, apiUrl) {
   const binding = state.binding(ctx.key);
@@ -636,7 +557,7 @@ export function bindingStatus(state, ctx, apiUrl) {
   return { ok: true, binding };
 }
 
-export function recordingAllowed(state, ctx, apiUrl, now = Date.now()) {
+export function recordingAllowed(state, ctx, apiUrl) {
   if (!isSignedIn(state.auth(apiUrl))) {
     return { ok: false, reason: 'not_signed_in' };
   }
@@ -648,13 +569,8 @@ export function recordingAllowed(state, ctx, apiUrl, now = Date.now()) {
   if (!cached?.state || isFetchedInTheFuture(cached)) {
     return { ok: false, reason: 'unknown_collection', binding: bound.binding };
   }
-  const stale = isCollectionOlderThan(cached, COLLECTION_TTL_MS, now);
   if (!collectionAllows(cached.state)) {
-    return { ok: false, reason: 'collection_blocked', binding: bound.binding, stale };
+    return { ok: false, reason: 'read_only', binding: bound.binding };
   }
-  const marker = state.blockMarker(apiUrl, bound.binding.projectId);
-  if (marker.at > (validFetchedAt(cached) ?? 0) || (marker.overrides !== null && cached.fetchedAt === marker.overrides)) {
-    return { ok: false, reason: 'block_not_cached', binding: bound.binding, stale };
-  }
-  return { ok: true, binding: bound.binding, stale };
+  return { ok: true, binding: bound.binding };
 }

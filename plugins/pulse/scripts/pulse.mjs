@@ -3,8 +3,9 @@ import { execute, loginListen } from './lib/commands.mjs';
 import { hookMain } from './lib/hooks.mjs';
 import { State } from './lib/state.mjs';
 import { logError } from './lib/util.mjs';
+import { writeReport } from './lib/writer.mjs';
 
-const BOOLEAN_FLAGS = new Set(['yes', 'json', 'wait', 'no-wait', 'background', 'new-client', 'force']);
+const BOOLEAN_FLAGS = new Set(['json', 'wait', 'no-wait', 'background', 'new-client', 'force']);
 
 function parseArgs(argv) {
   const positional = [];
@@ -47,6 +48,10 @@ async function run(argv, state) {
   }
   if (command === 'login-listen') {
     await loginListen(state);
+    return 0;
+  }
+  if (command === 'report-writer') {
+    await writeReport(state, { projectId: args.flags.project?.[0], host: args.flags.host });
     return 0;
   }
 

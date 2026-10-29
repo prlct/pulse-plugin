@@ -602,7 +602,7 @@ async function takeExpiredRuns(state, now = Date.now()) {
   return taken;
 }
 
-function runAllowed(state, run, now = Date.now()) {
+function runAllowed(state, run) {
   let apiUrl;
   try {
     apiUrl = state.apiUrl();
@@ -616,7 +616,7 @@ function runAllowed(state, run, now = Date.now()) {
     return false;
   }
   const ctx = { key: run.repoKey, kind: run.repoKind, remoteKey: run.remoteKey ?? null };
-  const allowed = recordingAllowed(state, ctx, apiUrl, now);
+  const allowed = recordingAllowed(state, ctx, apiUrl);
   return allowed.ok && allowed.binding.projectId === run.projectId;
 }
 
@@ -647,7 +647,7 @@ export async function settleRuns(state, runs, { end, now = Date.now(), salt, wai
   const drops = new Map();
   for (const run of runs) {
     try {
-      if (!runAllowed(state, run, now)) {
+      if (!runAllowed(state, run)) {
         if (isRecordingStateUnusable(state)) {
           waiting.push(run);
         }

@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-export const PLUGIN_VERSION = '0.5.1';
+export const PLUGIN_VERSION = '0.6.0';
 export const DEFAULT_API_URL = 'https://api.paralect.ai';
 export const SCHEMA_VERSION = 1;
 export const EVENTS_BATCH_MAX = 100;
