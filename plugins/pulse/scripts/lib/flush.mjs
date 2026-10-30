@@ -18,7 +18,7 @@ import {
 } from './events.mjs';
 import { repoContext } from './git.mjs';
 import { settleEndedSessions, settleExpiredRuns } from './skills.mjs';
-import { notePluginInfo, uploadsBlocked } from './updates.mjs';
+import { compareVersions, notePluginInfo, uploadsBlocked } from './updates.mjs';
 import { AUTH_FILE, COLLECTION_REFRESH_AFTER_MS, COLLECTION_TTL_MS, PROVIDER_IDS, collectionAllows, isCollectionOlderThan, isSignedIn, isStateBusy, runUnlessBusy } from './state.mjs';
 import {
   EVENTS_BATCH_MAX,
@@ -41,9 +41,14 @@ import {
 
 const HEARTBEAT_EVERY_MS = 6 * 60 * 60 * 1000;
 
+const isRegisteredVersionBehind = (registeredVersion) => {
+  const order = compareVersions(PLUGIN_VERSION, registeredVersion);
+  return order === null || order > 0;
+};
+
 export function isHeartbeatDue(record, providerId, now) {
   const registeredAt = record?.registeredProviders?.[providerId];
-  return Boolean(registeredAt) && (now - registeredAt > HEARTBEAT_EVERY_MS || record.registeredVersions?.[providerId] !== PLUGIN_VERSION);
+  return Boolean(registeredAt) && (now - registeredAt > HEARTBEAT_EVERY_MS || isRegisteredVersionBehind(record.registeredVersions?.[providerId]));
 }
 const BACKOFF_MAX_MS = 30 * 60 * 1000;
 const BACKOFF_BASE_MS = 30_000;

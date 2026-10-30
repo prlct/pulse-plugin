@@ -7,8 +7,9 @@ Pulse records which skills, tools and model your assistant uses and how many tok
 conversations or code. Every hour your assistant writes a short session report in the background. Your
 project managers can read it.
 
-The plugin also loads the skills of your Pulse project (`/pulse:skills`, `$pulse:skills`) and brings the
-Pulse tools for daily updates and changelogs, so you need no separate Pulse connector.
+The plugin also loads the skills of your Pulse project (`/pulse:skills`, `$pulse:skills`), writes your daily
+update as a draft in Pulse (`/pulse:daily`, `$pulse:daily`) and brings the Pulse tools for changelogs, so you
+need no separate Pulse connector.
 
 Requirements: Node.js 20 or newer.
 
@@ -51,6 +52,7 @@ One sign-in covers Claude Code and Codex on the same computer.
 | `/pulse:project`       | `$pulse:project`       | Change the Pulse project of this folder.                   |
 | `/pulse:skills`        | `$pulse:skills`        | List the skills of this project in Pulse.                  |
 | `/pulse:skills <name>` | `$pulse:skills <name>` | Run a project skill for your task.                         |
+| `/pulse:daily`         | `$pulse:daily`         | Write today's update, save it as a draft in Pulse.         |
 | `/pulse:help`          | `$pulse:help`          | The command list.                                          |
 
 To sign out of Pulse on this computer, say **disconnect**. It signs out Claude Code and Codex.
@@ -88,9 +90,10 @@ Reports from it resume after a Pulse update.
 When Pulse has a newer plugin, your assistant asks "Pulse has an update. Update now?" and runs the update
 command when you say yes. The command is also copied to your clipboard. You can run it yourself:
 
-- Claude Code: `claude plugin marketplace update pulse && claude plugin update pulse@pulse`, then run
-  `/reload-plugins` or restart Claude Code.
-- Codex: `codex plugin marketplace upgrade pulse`. Next time Codex starts, accept the Pulse hooks.
+- Claude Code: `claude plugin marketplace update pulse && claude plugin update pulse@pulse`. Then run
+  `/reload-plugins` in each open Claude Code session, or restart them. Open sessions keep the old plugin.
+- Codex: `codex plugin marketplace upgrade pulse`. Then restart each open Codex session, because open sessions
+  keep the old plugin. When Codex starts, accept the Pulse hooks.
 
 A plugin older than the version Pulse needs sends nothing until you update. What it recorded waits on this
 computer and is sent after the update.
@@ -129,7 +132,7 @@ node --test plugins/pulse/test/*.test.mjs
 claude plugin validate ./plugins/pulse --strict
 ```
 
-The CLI (`node scripts/pulse.mjs help | login | logout | status | project [list | bind <n>] | skills [<slug>] | flush`)
+The CLI (`node scripts/pulse.mjs help | login | logout | status | project [list | bind <n>] | skills [<slug>] | daily [save <markdown>] | flush`)
 runs the same commands as the `pulse_*` tools. Hooks: Claude Code `SessionStart`, `UserPromptSubmit`,
 `PostToolUse`, `UserPromptExpansion`, `Stop`, `SessionEnd`; Codex `SessionStart`, `PostToolUse`, `Stop`.
 They always exit 0, log their own errors (never payload contents) to `pulse.log`, upload in a detached

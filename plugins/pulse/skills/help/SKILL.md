@@ -1,13 +1,13 @@
 ---
 name: help
-description: List the Pulse plugin commands (status, project, skills) and what Pulse records. Use when the user asks for Pulse help or what the Pulse plugin can do.
+description: List the Pulse plugin commands (status, project, skills, daily) and what Pulse records. Use when the user asks for Pulse help or what the Pulse plugin can do.
 ---
 
 # Pulse help
 
 ## How to use Pulse
 
-Use the tools of this plugin's MCP server `pulse`: `pulse_status`, `pulse_connect`, `pulse_disconnect`, `pulse_project`, `pulse_skills`, `pulse_skill` and `pulse_help` (in Claude Code they show as `mcp__plugin_pulse_pulse__<name>`, in Codex under `mcp__pulse`). They need no shell command. Pass `cwd`, the absolute path of your current working directory, on every call.
+Use the tools of this plugin's MCP server `pulse`: `pulse_status`, `pulse_connect`, `pulse_disconnect`, `pulse_project`, `pulse_skills`, `pulse_skill`, `pulse_daily_context`, `pulse_daily_save` and `pulse_help` (in Claude Code they show as `mcp__plugin_pulse_pulse__<name>`, in Codex under `mcp__pulse`). They need no shell command. Pass `cwd`, the absolute path of your current working directory, on every call.
 
 Rules:
 

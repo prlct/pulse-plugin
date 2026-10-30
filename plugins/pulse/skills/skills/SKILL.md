@@ -1,6 +1,6 @@
 ---
 name: skills
-description: List the skills of this folder's Pulse project, or load one Pulse project skill by name and follow it for the user's task. Use for Pulse skills, or when the user asks to run a Pulse skill that is not status, project or help.
+description: List the skills of this folder's Pulse project, or load one Pulse project skill by name and follow it for the user's task. Use for Pulse skills, or when the user asks to run a Pulse skill that is not status, project, daily or help.
 ---
 
 # Pulse project skills

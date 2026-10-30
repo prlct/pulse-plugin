@@ -20,6 +20,9 @@ import {
 
 export const PROVIDER_IDS = ['claude-code', 'codex'];
 
+const DEVICE_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+const isDeviceId = (value) => typeof value === 'string' && DEVICE_ID_PATTERN.test(value);
+
 export const COLLECTION_TTL_MS = 5 * 60 * 1000;
 export const COLLECTION_REFRESH_AFTER_MS = COLLECTION_TTL_MS / 2;
 
@@ -206,6 +209,15 @@ export class State {
       { waitMs },
     );
     return saved.salt;
+  }
+
+  async deviceId() {
+    const current = this.config().deviceId;
+    if (isDeviceId(current)) {
+      return current;
+    }
+    const saved = await this.update(CONFIG_FILE, (c) => ({ ...c, deviceId: isDeviceId(c.deviceId) ? c.deviceId : crypto.randomUUID() }), {}, { waitMs: CRITICAL_WAIT_MS });
+    return saved.deviceId;
   }
 
   apiUrl() {

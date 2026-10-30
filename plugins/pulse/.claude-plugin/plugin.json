@@ -1,6 +1,6 @@
 {
   "name": "pulse",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "description": "Connect Claude Code to Pulse: one sign-in, and the folder with each project's code is connected to its Pulse project. Pulse records which skills, tools and model your assistant uses and how many tokens, never your conversations or code. Every hour your assistant writes a short session report in the background. Your project managers can read it. Also loads your project's Pulse skills and the Pulse tools for daily updates and changelogs.",
   "author": { "name": "Paralect", "url": "https://paralect.ai" },
   "homepage": "https://paralect.ai",

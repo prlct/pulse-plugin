@@ -25,12 +25,12 @@ export const UPDATE_COMMANDS = {
   claude: {
     label: 'Claude Code',
     command: 'claude plugin marketplace update pulse && claude plugin update pulse@pulse',
-    after: 'Run /reload-plugins or restart Claude Code.',
+    after: 'Then run /reload-plugins in each open Claude Code session, or restart them. Open sessions keep the old plugin.',
   },
   codex: {
     label: 'Codex',
     command: 'codex plugin marketplace upgrade pulse',
-    after: 'Next time Codex starts, accept the Pulse hooks.',
+    after: 'Then restart each open Codex session, because open sessions keep the old plugin. When Codex starts, accept the Pulse hooks.',
   },
 };
 
@@ -40,7 +40,7 @@ export const UPDATE_COPIED = 'Copied to your clipboard: the update command.';
 
 export function updateLines(host, { copied = false } = {}) {
   if (!updateCommandFor(host)) {
-    return Object.values(UPDATE_COMMANDS).map((c) => `${c.label}: run in a terminal: ${c.command}, then: ${c.after}`);
+    return Object.values(UPDATE_COMMANDS).map((c) => `${c.label}: run in a terminal: ${c.command}. ${c.after}`);
   }
   const c = UPDATE_COMMANDS[host];
   return [

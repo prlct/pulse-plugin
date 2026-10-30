@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-export const PLUGIN_VERSION = '0.6.0';
+export const PLUGIN_VERSION = '0.7.0';
 export const DEFAULT_API_URL = 'https://api.paralect.ai';
 export const SCHEMA_VERSION = 1;
 export const EVENTS_BATCH_MAX = 100;
@@ -36,7 +36,13 @@ export function cmdRef(host, sub) {
   return `pulse ${sub}`;
 }
 
-export const CLIENT_NAME = 'Pulse plugin';
+const CLIENT_NAME = 'Pulse plugin';
+const CLIENT_NAME_MAX = 80;
+
+export function clientName() {
+  const shortHostName = plain(os.hostname().split('.')[0], CLIENT_NAME_MAX);
+  return shortHostName ? plain(`${CLIENT_NAME} · ${shortHostName}`, CLIENT_NAME_MAX) : CLIENT_NAME;
+}
 
 export const pastTimeOrNull = (value) => (Number.isFinite(value) && value <= Date.now() ? value : null);
 

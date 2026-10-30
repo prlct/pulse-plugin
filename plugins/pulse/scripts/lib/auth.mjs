@@ -1,10 +1,10 @@
 import crypto from 'node:crypto';
 import http from 'node:http';
 
-import { ApiError, discover, request } from './api.mjs';
+import { ApiError, discover, request, safeBrowserUrl } from './api.mjs';
 import { dropSpool } from './events.mjs';
-import { grantTokens, isSignedIn, isStateBusy } from './state.mjs';
-import { CLIENT_NAME, PLUGIN_VERSION, logError, safeCode, sha256, sleep } from './util.mjs';
+import { PROVIDER_IDS, grantTokens, isSignedIn, isStateBusy } from './state.mjs';
+import { PLUGIN_VERSION, clientName, logError, safeCode, sha256, sleep } from './util.mjs';
 
 const LOOPBACK_PORTS = [47651, 47652, 47653, 47654, 47655];
 export const redirectUriFor = (port) => `http://127.0.0.1:${port}/callback`;
@@ -512,13 +512,15 @@ export function pkce() {
 
 export async function ensureClient(state, apiUrl, meta, { renew = false } = {}) {
   const redirectUris = LOOPBACK_PORTS.map(redirectUriFor);
+  const deviceId = await state.deviceId();
   const existing = state.auth(apiUrl);
   const reusable = (c) =>
     c?.clientId &&
+    c.deviceId === deviceId &&
     JSON.stringify(c.redirectUris) === JSON.stringify(redirectUris) &&
     c.registrationEndpoint === meta.registration_endpoint;
   if (!renew && reusable(existing)) {
-    return { clientId: existing.clientId, redirectUris, registrationEndpoint: existing.registrationEndpoint, tokenEndpoint: meta.token_endpoint };
+    return { clientId: existing.clientId, deviceId, redirectUris, registrationEndpoint: existing.registrationEndpoint, tokenEndpoint: meta.token_endpoint };
   }
   if (!renew && reusable(existing?.pendingClient)) {
     return { ...existing.pendingClient, tokenEndpoint: meta.token_endpoint };
@@ -526,7 +528,8 @@ export async function ensureClient(state, apiUrl, meta, { renew = false } = {}) 
   const res = await request(meta.registration_endpoint, {
     method: 'POST',
     json: {
-      client_name: CLIENT_NAME,
+      client_name: clientName(),
+      device_id: deviceId,
       redirect_uris: redirectUris,
       token_endpoint_auth_method: 'none',
       grant_types: ['authorization_code', 'refresh_token'],
@@ -539,6 +542,7 @@ export async function ensureClient(state, apiUrl, meta, { renew = false } = {}) 
   }
   const client = {
     clientId: res.json.client_id,
+    deviceId,
     redirectUris,
     registrationEndpoint: meta.registration_endpoint,
     tokenEndpoint: meta.token_endpoint,
@@ -600,15 +604,34 @@ export function revokeUnsavedTokens(state, apiUrl, tokens, { clientId, tokenEndp
   return removeRefusedGrant(state, apiUrl, grantFromTokens(tokens, { clientId, tokenEndpoint }, Date.now()));
 }
 
+const CLOSE_CONNECTION = { connection: 'close' };
+
+function connectedSetupUrl(pending) {
+  if (!safeBrowserUrl(pending.setupUrl)) {
+    return null;
+  }
+  const url = new URL(pending.setupUrl);
+  url.searchParams.set('plugin', 'connected');
+  if (PROVIDER_IDS.includes(pending.provider)) {
+    url.searchParams.set('assistant', pending.provider);
+  }
+  return url.toString();
+}
+
 export function awaitCallback({ server, pending, timeoutMs, onRefusedGrant, signal = null }) {
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
       server.close();
+      server.closeAllConnections?.();
       reject(new ApiError(0, { error: 'timeout', error_description: 'Sign-in was not completed in time' }));
     }, timeoutMs);
     const stop = () => {
       clearTimeout(timer);
       server.close();
+    };
+    const stopAfter = (res) => {
+      stop();
+      res.once('close', () => server.closeAllConnections?.());
     };
     let callbackClaimed = false;
     signal?.addEventListener(
@@ -625,26 +648,26 @@ export function awaitCallback({ server, pending, timeoutMs, onRefusedGrant, sign
     const answer = async (req, res) => {
       const url = new URL(req.url ?? '/', 'http://127.0.0.1');
       if (url.pathname === '/ping') {
-        res.writeHead(200, { 'content-type': 'text/plain', 'cache-control': 'no-store' }).end(pingToken(pending.state));
+        res.writeHead(200, { 'content-type': 'text/plain', 'cache-control': 'no-store', ...CLOSE_CONNECTION }).end(pingToken(pending.state));
         return;
       }
       if (url.pathname !== '/callback') {
-        res.writeHead(404).end();
+        res.writeHead(404, CLOSE_CONNECTION).end();
         return;
       }
       if (callbackClaimed) {
-        res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
+        res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', ...CLOSE_CONNECTION });
         res.end(page('Pulse sign-in', 'This sign-in is already being completed. You can close this tab.'));
         return;
       }
       const finish = (status, title, text, outcome) => {
-        res.writeHead(status, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
+        res.writeHead(status, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', ...CLOSE_CONNECTION });
         res.end(page(title, text));
-        stop();
+        stopAfter(res);
         outcome();
       };
       if (url.searchParams.get('state') !== pending.state) {
-        res.writeHead(400, { 'content-type': 'text/html; charset=utf-8' });
+        res.writeHead(400, { 'content-type': 'text/html; charset=utf-8', ...CLOSE_CONNECTION });
         res.end(
           page(
             'Sign-in link mismatch',
@@ -691,6 +714,13 @@ export function awaitCallback({ server, pending, timeoutMs, onRefusedGrant, sign
           finish(400, 'Pulse was not connected', text, () => reject(err));
           return;
         }
+        const setupUrl = connectedSetupUrl(pending);
+        if (setupUrl) {
+          res.writeHead(302, { location: setupUrl, 'cache-control': 'no-store', ...CLOSE_CONNECTION }).end();
+          stopAfter(res);
+          resolve(tokens.json);
+          return;
+        }
         finish(200, 'Pulse is connected', 'You can close this tab and return to your agent.', () => resolve(tokens.json));
       } else {
         finish(400, 'Pulse was not connected', 'The sign-in could not be completed. Start again from your agent.', () =>
@@ -701,9 +731,9 @@ export function awaitCallback({ server, pending, timeoutMs, onRefusedGrant, sign
     server.on('request', (req, res) => {
       answer(req, res).catch((err) => {
         if (!res.headersSent) {
-          res.writeHead(500, { 'cache-control': 'no-store' }).end();
+          res.writeHead(500, { 'cache-control': 'no-store', ...CLOSE_CONNECTION }).end();
         }
-        stop();
+        stopAfter(res);
         reject(err);
       });
     });
