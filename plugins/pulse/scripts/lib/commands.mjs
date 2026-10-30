@@ -88,7 +88,21 @@ class Exit extends Error {
 const cli = (sub) => `node "${SCRIPT}" ${sub}`;
 
 const RECORDED = 'Pulse records which skills, tools and model your assistant uses and how many tokens, never your conversations or code.';
-const REPORTS = 'Every hour your assistant writes a short session report in the background. Your project managers can read it.';
+const REPORTS_READERS = 'Your project managers can read it.';
+const REPORTS = `Your assistant regularly writes a short session report in the background. ${REPORTS_READERS}`;
+const MINUTES_PER_HOUR = 60;
+
+function reportIntervalText(minutes) {
+  if (!Number.isInteger(minutes) || minutes <= 0 || minutes === MINUTES_PER_HOUR) {
+    return 'hour';
+  }
+  if (minutes % MINUTES_PER_HOUR === 0) {
+    return `${minutes / MINUTES_PER_HOUR} hours`;
+  }
+  return minutes === 1 ? 'minute' : `${minutes} minutes`;
+}
+
+const reportsText = (report) => `Every ${reportIntervalText(report?.intervalMinutes)} your assistant writes a short session report in the background. ${REPORTS_READERS}`;
 const GUEST_NOT_RECORDED = 'Guests are not recorded in this project.';
 const REPLY_WITH_NUMBER = 'Reply with a number.';
 const TEAM_TOLD = 'The Pulse team has been told.';
@@ -522,7 +536,7 @@ export class Cli {
     if (isReadOnlyCollection(cs)) {
       lines.push(`Recording: off — ${GUEST_NOT_RECORDED}`);
     } else if (cs) {
-      lines.push(`Recording: on. ${RECORDED}`, `Reports: ${REPORTS}`, reportScheduleLine(cs.report), ...this.reportsOnHoldLines());
+      lines.push(`Recording: on. ${RECORDED}`, `Reports: ${reportsText(cs.report)}`, reportScheduleLine(cs.report), ...this.reportsOnHoldLines());
     } else {
       lines.push('Recording: not known yet — Pulse could not be reached.');
     }
@@ -636,7 +650,7 @@ export class Cli {
 
   async recordingLines(projectId) {
     const cs = await refreshCollection(this.state, this.auth(), projectId);
-    return isReadOnlyCollection(cs) ? [`Recording: off — ${GUEST_NOT_RECORDED}`] : [RECORDED, REPORTS];
+    return isReadOnlyCollection(cs) ? [`Recording: off — ${GUEST_NOT_RECORDED}`] : [RECORDED, reportsText(cs?.report)];
   }
 
   boundProject() {

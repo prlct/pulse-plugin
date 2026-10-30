@@ -143,3 +143,9 @@ due. The writer runs `claude --safe-mode -p --tools "" --disallowedTools "mcp__*
 -c web_search="disabled" -o <file> -` (the feature list is `CODEX_TOOL_FEATURES` in `scripts/lib/writer.mjs`) with
 `PULSE_REPORT_WRITER=1`, under which every Pulse hook exits at once; one writer runs per person and
 project at a time.
+
+On macOS and Linux, the writer finds the assistant in PATH, next to Node.js, through the user's login
+shell, or in common install folders, including nvm, Volta, Homebrew and app bundles. It caches the path
+for a day and looks again if that executable disappears. The assistant runs by its full path, with its
+folder and the plugin's Node.js folder added to PATH, so npm launchers work from app hooks too. Login
+shell discovery has a three-second timeout so a slow shell cannot keep the report writer open.

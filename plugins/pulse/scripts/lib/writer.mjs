@@ -6,6 +6,7 @@ import path from 'node:path';
 import { listSkillLibrary, pluginCall } from './api.mjs';
 import { Auth } from './auth.mjs';
 import { refreshCollection } from './flush.mjs';
+import { buildChildPath, buildSystem, findReportCli } from './report-cli.mjs';
 import { collectionAllows, runUnlessBusy, unreportedSessions } from './state.mjs';
 import { readSessionWindow } from './transcript.mjs';
 import { PLUGIN_VERSION, PROVIDERS, UPLOAD_LOCK_STALE_MS, acquireLock, findProvider, isoNow, keepLockFresh, localDateTime, logError, parseJson, plain, sha256 } from './util.mjs';
@@ -82,11 +83,12 @@ const codexArgs = (features) => [
   '-',
 ];
 const WINDOWS = 'win32';
+const MISSING_CLI_CODE = 'ENOENT';
 
 const quoteForCmd = (arg) => `"${arg.replaceAll('"', String.raw`\"`)}"`;
 
-export function reportCliSpawn(host, platform = process.platform, features = CODEX_TOOL_FEATURES) {
-  const [command, args] = host === 'codex' ? ['codex', codexArgs(features)] : ['claude', CLAUDE_ARGS];
+export function reportCliSpawn(host, platform = process.platform, features = CODEX_TOOL_FEATURES, command = host) {
+  const args = host === 'codex' ? codexArgs(features) : CLAUDE_ARGS;
   if (platform !== WINDOWS) {
     return { command, args, shell: false };
   }
@@ -291,11 +293,11 @@ function unknownFeatureIn(err, features) {
   return name && features.includes(name) ? name : null;
 }
 
-async function runWithKnownFeatures(host, options) {
+async function runWithKnownFeatures(host, command, options) {
   let features = CODEX_TOOL_FEATURES;
   for (;;) {
     try {
-      return await runCommand(reportCliSpawn(host, process.platform, features), options);
+      return await runCommand(reportCliSpawn(host, process.platform, features, command), options);
     } catch (err) {
       const unknown = host === 'codex' ? unknownFeatureIn(err, features) : null;
       if (!unknown) {
@@ -306,12 +308,24 @@ async function runWithKnownFeatures(host, options) {
   }
 }
 
-export async function runReportCli(host, prompt, { env = process.env, timeoutMs = CLI_TIMEOUT_MS } = {}) {
+async function reportCliCommand(state, host, system) {
+  if (process.platform === WINDOWS) {
+    return { command: host, env: system.env };
+  }
+  const command = await findReportCli(state, host, system);
+  if (!command) {
+    throw new WriterError(MISSING_CLI_CODE, `${host} was not found in PATH, next to node, in the login shell or in the usual install folders`);
+  }
+  return { command, env: { ...system.env, PATH: buildChildPath(command, system) } };
+}
+
+export async function runReportCli(host, prompt, { state, env = process.env, timeoutMs = CLI_TIMEOUT_MS, system = buildSystem(env) }) {
+  const cli = await reportCliCommand(state, host, system);
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pulse-report-'));
   const cwd = path.join(dir, 'empty');
   fs.mkdirSync(cwd);
   try {
-    const stdout = await runWithKnownFeatures(host, { cwd, env: { ...env, [REPORT_WRITER_ENV]: '1' }, input: prompt, timeoutMs });
+    const stdout = await runWithKnownFeatures(host, cli.command, { cwd, env: { ...cli.env, [REPORT_WRITER_ENV]: '1' }, input: prompt, timeoutMs });
     return host === 'codex' ? fs.readFileSync(path.join(dir, ANSWER_FILE), 'utf8') : claudeResult(stdout);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
@@ -319,7 +333,6 @@ export async function runReportCli(host, prompt, { env = process.env, timeoutMs 
 }
 
 const DAY_MS = 24 * 60 * 60 * 1000;
-const MISSING_CLI_CODE = 'ENOENT';
 
 function readWindow(sessions, from, to) {
   const entries = [];
@@ -398,7 +411,7 @@ async function writeHostReport(state, { auth, host, sessions, from, now, library
   }
   const prompt = buildReportPrompt({ excerpt, library: await library(), tokens: window.tokens, usualTokensPerHour, from, to: now });
   try {
-    const report = parseReport(await runCli(host, prompt));
+    const report = parseReport(await runCli(host, prompt, { state }));
     if (!report) {
       throw new WriterError('report_not_json');
     }
