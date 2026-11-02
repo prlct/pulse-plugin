@@ -125,8 +125,8 @@ An assistant that you allow to run any shell command runs as you: it can read th
 
 ## For maintainers
 
-The plugin is developed in a private repository and published to `prlct/pulse-plugin` automatically; the
-published branch is set by the `PULSE_PLUGIN_BRANCH` repository variable.
+The plugin is developed in a private repository and published to `prlct/pulse-plugin` automatically
+from the `production` branch, on every merge that changes the plugin.
 
 Run the Pulse API on `http://localhost:3001`, then:
 
