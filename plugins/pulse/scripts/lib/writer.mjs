@@ -9,7 +9,7 @@ import { refreshCollection } from './flush.mjs';
 import { buildChildPath, buildSystem, findReportCli } from './report-cli.mjs';
 import { collectionAllows, runUnlessBusy, unreportedSessions } from './state.mjs';
 import { readSessionWindow } from './transcript.mjs';
-import { PLUGIN_VERSION, PROVIDERS, UPLOAD_LOCK_STALE_MS, acquireLock, findProvider, isoNow, keepLockFresh, localDateTime, logError, parseJson, plain, sha256 } from './util.mjs';
+import { PLUGIN_VERSION, PROVIDERS, UPLOAD_LOCK_STALE_MS, acquireLock, findProvider, isoNow, keepLockFresh, localDateTime, logError, parseJson, plain, quoteForCmd, sha256 } from './util.mjs';
 
 export const REPORT_WRITER_ENV = 'PULSE_REPORT_WRITER';
 export const EXCERPT_MAX_CHARS = 60_000;
@@ -84,8 +84,6 @@ const codexArgs = (features) => [
 ];
 const WINDOWS = 'win32';
 const MISSING_CLI_CODE = 'ENOENT';
-
-const quoteForCmd = (arg) => `"${arg.replaceAll('"', String.raw`\"`)}"`;
 
 export function reportCliSpawn(host, platform = process.platform, features = CODEX_TOOL_FEATURES, command = host) {
   const args = host === 'codex' ? codexArgs(features) : CLAUDE_ARGS;

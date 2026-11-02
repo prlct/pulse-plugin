@@ -52,10 +52,20 @@ One sign-in covers Claude Code and Codex on the same computer.
 | `/pulse:project`       | `$pulse:project`       | Change the Pulse project of this folder.                   |
 | `/pulse:skills`        | `$pulse:skills`        | List the skills of this project in Pulse.                  |
 | `/pulse:skills <name>` | `$pulse:skills <name>` | Run a project skill for your task.                         |
-| `/pulse:daily`         | `$pulse:daily`         | Write today's update, save it as a draft in Pulse.         |
+| `/pulse:daily`         | `$pulse:daily`         | Write today's update with media, save it as a draft.       |
 | `/pulse:help`          | `$pulse:help`          | The command list.                                          |
 
 To sign out of Pulse on this computer, say **disconnect**. It signs out Claude Code and Codex.
+
+## Daily update with screenshots
+
+`/pulse:daily` (Codex: `$pulse:daily`) can show your work with media. The assistant reads the diff of each change
+in this folder and proposes a screen recording, a screenshot, an architecture diagram or none, then asks which to
+make. Screenshots and recordings need the app running on your computer and a test account.
+
+The first time, it asks to install Playwright, Mermaid and a Chromium browser into `~/.config/pulse/media-tools` (or `PULSE_HOME`).
+The install runs no package scripts, and Mermaid is one file checked against a pinned hash. Recordings start after sign-in. Before you share a screen recording, the assistant asks you to watch it.
+Media stays on your computer: you add the files to the draft in Pulse before you post it.
 
 ## What Pulse records
 
@@ -133,7 +143,8 @@ claude plugin validate ./plugins/pulse --strict
 ```
 
 The CLI (`node scripts/pulse.mjs help | login | logout | status | project [list | bind <n>] | skills [<slug>] | daily [save <markdown>] | flush`)
-runs the same commands as the `pulse_*` tools. Hooks: Claude Code `SessionStart`, `UserPromptSubmit`,
+runs the same commands as the `pulse_*` tools. `node scripts/pulse.mjs media setup | diagram <in.mmd> <out.png> |
+capture <spec.json>` makes the media for `/pulse:daily`. Hooks: Claude Code `SessionStart`, `UserPromptSubmit`,
 `PostToolUse`, `UserPromptExpansion`, `Stop`, `SessionEnd`; Codex `SessionStart`, `PostToolUse`, `Stop`.
 They always exit 0, log their own errors (never payload contents) to `pulse.log`, upload in a detached
 `pulse.mjs flush`, and start the report writer as a detached `pulse.mjs report-writer` when a report is

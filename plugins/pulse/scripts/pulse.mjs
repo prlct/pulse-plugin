@@ -5,7 +5,7 @@ import { State } from './lib/state.mjs';
 import { logError } from './lib/util.mjs';
 import { writeReport } from './lib/writer.mjs';
 
-const BOOLEAN_FLAGS = new Set(['json', 'wait', 'no-wait', 'background', 'new-client', 'force']);
+const BOOLEAN_FLAGS = new Set(['json', 'wait', 'no-wait', 'background', 'new-client', 'force', 'allow-remote']);
 
 function parseArgs(argv) {
   const positional = [];
@@ -45,6 +45,10 @@ async function run(argv, state) {
   if (major < 20) {
     process.stdout.write(`Pulse needs Node.js 20 or newer (found ${process.versions.node}).\n`);
     return 1;
+  }
+  if (command === 'media') {
+    const { mediaMain } = await import('./lib/media-cli.mjs');
+    return mediaMain(args.positional.slice(1), { allowRemote: args.flags['allow-remote'] === true });
   }
   if (command === 'login-listen') {
     await loginListen(state);

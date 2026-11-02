@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-export const PLUGIN_VERSION = '0.7.1';
+export const PLUGIN_VERSION = '0.8.0';
 export const DEFAULT_API_URL = 'https://api.paralect.ai';
 export const SCHEMA_VERSION = 1;
 export const EVENTS_BATCH_MAX = 100;
@@ -80,7 +80,7 @@ const UNREADABLE_PATH_CODES = new Set([...MISSING_PATH_CODES, 'EACCES', 'EPERM',
 export const isMissingPath = (err) => MISSING_PATH_CODES.has(err?.code);
 export const isUnreadablePath = (err) => UNREADABLE_PATH_CODES.has(err?.code);
 
-function unlessUnreadable(read, fallback) {
+export function unlessUnreadable(read, fallback) {
   try {
     return read();
   } catch (err) {
@@ -160,9 +160,9 @@ export function parseJson(text) {
   }
 }
 
-export function urlOrNull(value) {
+export function urlOrNull(value, base) {
   try {
-    return new URL(value);
+    return new URL(value, base);
   } catch (err) {
     if (err?.code === 'ERR_INVALID_URL') {
       return null;
@@ -571,5 +571,7 @@ export const localDateTime = (ms) => {
 export const quoted = (value, max = 120) => `"${plain(value, max).replace(/"/g, "'")}"`;
 
 export const isoNow = (now = Date.now()) => new Date(now).toISOString();
+
+export const quoteForCmd = (arg) => `"${arg.replaceAll('"', String.raw`\"`)}"`;
 
 export const realpathOr = (p) => unlessUnreadable(() => fs.realpathSync(p), path.resolve(p));
