@@ -5,6 +5,7 @@ import { State } from './lib/state.mjs';
 import { logError } from './lib/util.mjs';
 import { writeReport } from './lib/writer.mjs';
 
+const REPEATED_FLAGS = new Set(['project', 'media']);
 const BOOLEAN_FLAGS = new Set(['json', 'wait', 'no-wait', 'background', 'new-client', 'force', 'allow-remote']);
 
 function parseArgs(argv) {
@@ -22,8 +23,8 @@ function parseArgs(argv) {
       continue;
     }
     const value = inline ?? argv[(i += 1)];
-    if (name === 'project') {
-      flags.project = [...(flags.project ?? []), value];
+    if (REPEATED_FLAGS.has(name)) {
+      flags[name] = [...(flags[name] ?? []), value];
     } else {
       flags[name] = value;
     }

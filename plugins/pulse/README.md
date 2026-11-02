@@ -65,7 +65,7 @@ make. Screenshots and recordings need the app running on your computer and a tes
 
 The first time, it asks to install Playwright, Mermaid and a Chromium browser into `~/.config/pulse/media-tools` (or `PULSE_HOME`).
 The install runs no package scripts, and Mermaid is one file checked against a pinned hash. Recordings start after sign-in. Before you share a screen recording, the assistant asks you to watch it.
-Media stays on your computer: you add the files to the draft in Pulse before you post it.
+The media you keep are uploaded with the draft and attached to it in Pulse, where you can remove or add files before you post it. Saving again replaces the draft. Saving with media also replaces its attached files; saving without media keeps them.
 
 ## What Pulse records
 

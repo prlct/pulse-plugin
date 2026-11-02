@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-export const PLUGIN_VERSION = '0.8.0';
+export const PLUGIN_VERSION = '0.9.0';
 export const DEFAULT_API_URL = 'https://api.paralect.ai';
 export const SCHEMA_VERSION = 1;
 export const EVENTS_BATCH_MAX = 100;
@@ -558,7 +558,17 @@ export function plain(value, max = 120) {
   const text = replaceCodePoints(String(value ?? ''), isUnsafeForOneLine, ' ')
     .replace(/\s+/g, ' ')
     .trim();
-  return text.length > max ? `${text.slice(0, max - 1)}…` : text;
+  if (text.length <= max) {
+    return text;
+  }
+  let kept = '';
+  for (const char of text) {
+    if (kept.length + char.length > max - 1) {
+      break;
+    }
+    kept += char;
+  }
+  return `${kept}…`;
 }
 
 const padTwo = (n) => String(n).padStart(2, '0');

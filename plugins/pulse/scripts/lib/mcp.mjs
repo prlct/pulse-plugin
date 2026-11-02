@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { ApiError, NotSignedIn, mcpCall } from './api.mjs';
 import { Auth, settleRefreshes } from './auth.mjs';
 import { DAILY_DRAFT_MAX_CHARS, execute } from './commands.mjs';
+import { ACCEPTED_MEDIA, DRAFT_MEDIA_MAX } from './draft-media.mjs';
 import { claimHeartbeatRequest, spawnFlush } from './hooks.mjs';
 import { SKILL_SLUG_MAX, settleExpiredRuns } from './skills.mjs';
 import { ApiUrlError, PROVIDER_IDS, isSignedIn } from './state.mjs';
@@ -155,13 +156,28 @@ export const LOCAL_TOOLS = [
     name: 'pulse_daily_save',
     title: 'Save the daily update draft in Pulse',
     description:
-      "Save the user's daily update as a draft in this folder's Pulse project and open the draft in the browser, where the user adds mentions or screenshots and posts it. " +
-      "Call it only after you showed the update and the user clearly said yes to saving it. It replaces the user's open draft in this project, if there is one. " +
+      "Save the user's daily update as a draft in this folder's Pulse project, with the screenshots, recordings and diagrams the user kept attached, and open the draft in the browser, where the user adds mentions and posts it. " +
+      "Call it only after you showed the update and the media and the user clearly said yes to saving them. It replaces the user's open draft in this project, if there is one. With media, it also replaces the draft's attached files; without media, it keeps them. " +
+      `Pass each kept file in media with its absolute path; Pulse takes ${ACCEPTED_MEDIA}, images up to 10 MB and videos up to 50 MB. If any file fails, nothing is saved. ` +
       RULES,
     inputSchema: {
       type: 'object',
       properties: {
         markdown: { type: 'string', minLength: 1, maxLength: DAILY_DRAFT_MAX_CHARS, description: 'The daily update the user approved, in Markdown.' },
+        media: {
+          type: 'array',
+          maxItems: DRAFT_MEDIA_MAX,
+          description: 'The media files the user kept, in the order they should show under the update.',
+          items: {
+            type: 'object',
+            properties: {
+              path: { type: 'string', minLength: 1, maxLength: 4096, description: 'The absolute path of the file on this computer.' },
+              name: { type: 'string', maxLength: 200, description: 'A short name that says which item of the update the file shows.' },
+            },
+            required: ['path'],
+            additionalProperties: false,
+          },
+        },
         ...CWD_PROP,
       },
       required: ['markdown'],
@@ -857,7 +873,7 @@ export class PulseMcpServer {
       }
     }
     const toolUseId = typeof meta?.['claudecode/toolUseId'] === 'string' && /^[\w-]{1,200}$/.test(meta['claudecode/toolUseId']) ? meta['claudecode/toolUseId'] : null;
-    const extra = name === 'pulse_skill' ? { skillRun: { instance: this.instance, toolUseId } } : {};
+    const extra = name === 'pulse_skill' ? { skillRun: { instance: this.instance, toolUseId } } : name === 'pulse_daily_save' ? { dailyMedia: args.media } : {};
     const result = await this.run(positional, flags, cwd, extra);
     const lines = [...result.lines];
     if ((name === 'pulse_status' || name === 'pulse_connect') && host === 'codex' && !this.listedRemote && this.signedIn()) {

@@ -34,7 +34,7 @@ export const isReadOnly = (err) => err instanceof ApiError && err.status === 403
 
 export async function request(
   url,
-  { method = 'GET', token, json, form, accept = 'application/json', timeoutMs = REQUEST_TIMEOUT_MS, maxBytes = 0 } = {},
+  { method = 'GET', token, json, form, bytes, contentType, accept = 'application/json', timeoutMs = REQUEST_TIMEOUT_MS, maxBytes = 0 } = {},
 ) {
   const headers = { accept, 'user-agent': `pulse-plugin/${PLUGIN_VERSION}` };
   let body;
@@ -47,6 +47,9 @@ export async function request(
   } else if (form) {
     headers['content-type'] = 'application/x-www-form-urlencoded';
     body = new URLSearchParams(form).toString();
+  } else if (bytes) {
+    headers['content-type'] = contentType;
+    body = bytes;
   }
   let res;
   try {

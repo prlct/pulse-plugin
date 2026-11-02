@@ -3,7 +3,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
-import { ApiError, NotSignedIn, discover, getSkill, isProjectGone, isReadOnly, isUnknownNotFound, listSkills, pluginCall, safeBrowserUrl } from './api.mjs';
+import { ApiError, NotSignedIn, discover, getSkill, isProjectGone, isReadOnly, isUnknownNotFound, listSkills, pluginCall, request, safeBrowserUrl } from './api.mjs';
 import {
   Auth,
   DISCONNECT_HINT,
@@ -25,6 +25,7 @@ import {
   revokeUnsavedTokens,
   signInReplaced,
 } from './auth.mjs';
+import { DraftMediaError, checkDraftMedia, readCheckedMedia } from './draft-media.mjs';
 import { countPending, dropSpool, findUnreadableSpoolFiles, keepFullQueues, summarizeDroppedEvents } from './events.mjs';
 import { notePluginInfo, pluginUpdate, updateCommandFor, updateLines, versionLines } from './updates.mjs';
 import { STATE_BUSY_ERROR, UPLOAD_RUNNING_ERROR, bindingFor, ensureRegistered, fetchProjects, flush, heartbeat, refreshCollection } from './flush.mjs';
@@ -55,7 +56,7 @@ import {
   recordingAllowed,
   runUnlessBusy,
 } from './state.mjs';
-import { PLUGIN_VERSION, PROVIDERS, cmdRef, detectHost, hostKey, inCodex, isUnreadablePath, localDateTime, logError, plain, quoted, safeCode, sleep, spawnDetached, writeJson } from './util.mjs';
+import { PLUGIN_VERSION, PROVIDERS, cmdRef, detectHost, hostKey, inCodex, isUnreadablePath, localDateTime, logError, plain, quoted, safeCode, sleep, spawnDetached, urlOrNull, writeJson } from './util.mjs';
 
 const SCRIPT = fileURLToPath(new URL('../pulse.mjs', import.meta.url));
 const LOGIN_TIMEOUT_MS = 10 * 60 * 1000;
@@ -75,6 +76,38 @@ const PENDING_WATCH_MS = 1000;
 const DAILY_CONTEXT_LIMITS = { maxBytes: 1024 * 1024, timeoutMs: 30_000 };
 export const DAILY_DRAFT_MAX_CHARS = 4000;
 const SECRET_IN_DRAFT = 'secret_in_draft';
+const MEDIA_UPLOAD_MIN_TIMEOUT_MS = 120_000;
+const SLOW_UPLINK_BYTES_PER_SECOND = 256 * 1024;
+const MS_PER_SECOND = 1000;
+const MEDIA_UPLOAD_RESPONSE_MAX_BYTES = 64 * 1024;
+
+export const mediaUploadLimitsFor = (byteLength) => ({
+  timeoutMs: Math.max(MEDIA_UPLOAD_MIN_TIMEOUT_MS, Math.ceil((byteLength / SLOW_UPLINK_BYTES_PER_SECOND) * MS_PER_SECOND)),
+  maxBytes: MEDIA_UPLOAD_RESPONSE_MAX_BYTES,
+});
+const MEDIA_REASON_MAX = 200;
+
+const mediaFailure = (err) =>
+  new Exit([`Could not attach ${plain(err.file, 400)}: ${err.reason}. Nothing was saved.`], 1, { error: 'media', file: err.file });
+
+const withMediaFailure = (work) => {
+  try {
+    return work();
+  } catch (err) {
+    throw err instanceof DraftMediaError ? mediaFailure(err) : err;
+  }
+};
+
+function uploadFailureReason(res) {
+  if (res.status === 0) {
+    return 'Pulse could not be reached while the file was sent';
+  }
+  const said = typeof res.json?.error === 'string' ? `: ${plain(res.json.error, MEDIA_REASON_MAX)}` : '';
+  return `Pulse refused the file (HTTP ${res.status})${said}`;
+}
+
+const attachedLine = (attachments) =>
+  attachments.length === 0 ? [] : [`Attached ${attachments.length} ${attachments.length === 1 ? 'file' : 'files'}: ${attachments.map((a) => quoted(a.name)).join(', ')}.`];
 
 class Exit extends Error {
   constructor(lines, code = 1, data = {}) {
@@ -893,24 +926,58 @@ export class Cli {
     };
   }
 
-  async dailySave(markdown) {
+  async uploadDraftMedia(binding, file) {
+    let ticket;
+    try {
+      ticket = await this.dailyCall(binding, { method: 'POST', route: 'daily-draft/uploads', verb: 'save', json: { mime: file.mime } });
+    } catch (err) {
+      throw err instanceof Exit ? new Exit([`Could not attach ${plain(file.path, 400)}.`, ...err.lines], err.exitCode, err.data) : err;
+    }
+    const apiOrigin = new URL(this.apiUrl).origin;
+    const uploadUrl = urlOrNull(ticket?.uploadUrl);
+    if (typeof ticket?.key !== 'string' || !uploadUrl || uploadUrl.origin !== apiOrigin) {
+      throw mediaFailure(new DraftMediaError(file.path, `Pulse sent an upload link that is not on ${apiOrigin}, so the file was not sent`));
+    }
+    const bytes = withMediaFailure(() => readCheckedMedia(file));
+    const res = await request(uploadUrl.href, { method: 'PUT', bytes, contentType: file.mime, ...mediaUploadLimitsFor(bytes.byteLength) });
+    if (res.status !== 200) {
+      throw mediaFailure(new DraftMediaError(file.path, uploadFailureReason(res)));
+    }
+    return { key: ticket.key, name: file.name };
+  }
+
+  async dailySave(markdown, media) {
     const text = typeof markdown === 'string' ? markdown : '';
     if (!text.trim() || text.length > DAILY_DRAFT_MAX_CHARS) {
       throw new Exit([`The daily update must be 1 to ${DAILY_DRAFT_MAX_CHARS} characters. Nothing was saved.`], 1, { error: 'invalid_markdown' });
     }
+    const files = withMediaFailure(() => checkDraftMedia(media));
     const binding = this.boundProject();
-    const saved = await this.dailyCall(binding, { method: 'PUT', route: 'daily-draft', verb: 'save', json: { markdown: text } });
+    const attachments = [];
+    for (const file of files) {
+      attachments.push(await this.uploadDraftMedia(binding, file));
+    }
+    const json = attachments.length > 0 ? { markdown: text, attachments } : { markdown: text };
+    const saved = await this.dailyCall(binding, { method: 'PUT', route: 'daily-draft', verb: 'save', json });
     const name = quoted(binding.projectName);
-    const data = { project: { id: binding.projectId, name: binding.projectName }, draftId: typeof saved?.draftId === 'string' ? saved.draftId : null };
+    const data = {
+      project: { id: binding.projectId, name: binding.projectName },
+      draftId: typeof saved?.draftId === 'string' ? saved.draftId : null,
+      attachments: attachments.length,
+    };
     if (!safeBrowserUrl(saved?.url, { allowQuery: true })) {
-      return { lines: [`Saved your daily update for ${name} as a draft in Pulse. Open the project's feed in Pulse to finish and post it.`], data };
+      return {
+        lines: [`Saved your daily update for ${name} as a draft in Pulse.`, ...attachedLine(attachments), "Open the project's feed in Pulse to finish and post it."],
+        data,
+      };
     }
     const isOpened = apiUrlKind(this.apiUrl) !== 'custom' && browserUsable(this.env) && (await this.openBrowser(saved.url));
     return {
       lines: [
         `Saved your daily update for ${name} as a draft in Pulse.`,
+        ...attachedLine(attachments),
         isOpened ? `Opened it in your browser: ${saved.url}` : `Open it in Pulse: ${saved.url}`,
-        'Add mentions or screenshots there, then post it.',
+        attachments.length > 0 ? 'Add mentions there if you like, then post it.' : 'Add mentions or screenshots there, then post it.',
       ],
       data: { ...data, url: saved.url, opened: isOpened },
     };
@@ -1730,6 +1797,14 @@ export async function loginListen(state) {
 
 const DENIED = new Set(['EPERM', 'EACCES', 'EROFS']);
 
+const dailyMediaOf = (args, options) => {
+  if (options.dailyMedia !== undefined) {
+    return options.dailyMedia;
+  }
+  const paths = args.flags.media;
+  return paths === undefined ? undefined : [paths].flat().map((path) => ({ path }));
+};
+
 function deniedLines(state, err, env) {
   return [
     `Pulse could not save to ${state.home} (${err.code}). The command did not complete.`,
@@ -1754,7 +1829,7 @@ export async function execute({ state, env = process.env, cwd = process.cwd(), a
     ['flush', () => runner.flush()],
     ['skills', () => (sub ? runner.skillLoad(sub) : runner.skillsList())],
     ['skill', () => runner.skillLoad(sub)],
-    ['daily', () => (sub === 'save' ? runner.dailySave(value) : runner.dailyContext())],
+    ['daily', () => (sub === 'save' ? runner.dailySave(value, dailyMediaOf(args, options)) : runner.dailyContext())],
     [
       'project',
       () => {
