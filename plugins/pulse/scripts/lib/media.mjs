@@ -20,6 +20,8 @@ const VIEWPORT_DEFAULT = { width: 1280, height: 800 };
 const VIEWPORT_LIMITS = { width: [320, 3840], height: [240, 2160] };
 const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]']);
 const SCREENSHOT_NAME = /^[a-z0-9-]{1,60}$/;
+const ANNOTATIONS_MAX = 12;
+const ANNOTATION_TEXT_MAX = 80;
 const KEY_NAME = /^[A-Za-z0-9+]{1,40}$/;
 const SPEC_KEYS = new Set(['baseUrl', 'outDir', 'viewport', 'record', 'signIn', 'steps']);
 const ERROR_PAGE_PROTOCOL = 'chrome-error:';
@@ -88,6 +90,56 @@ function parseViewport(value) {
   return { width: value.width, height: value.height };
 }
 
+const hasKeys = (value, keys) =>
+  isPlainObject(value) && Object.keys(value).length === keys.length && keys.every((key) => Object.hasOwn(value, key));
+
+function parsePoint(value, field) {
+  if (!Array.isArray(value) || value.length !== 2 || !value.every((coordinate) => Number.isFinite(coordinate) && coordinate >= 0 && coordinate <= 1)) {
+    throw new SpecError(`${field} must be an [x, y] pair with numbers from 0 to 1.`);
+  }
+  return value;
+}
+
+function parseAnnotation(value, index) {
+  const field = `screenshot.annotations[${index}]`;
+  if (hasKeys(value, ['arrow']) && hasKeys(value.arrow, ['from', 'to'])) {
+    const from = parsePoint(value.arrow.from, `${field}.arrow.from`);
+    const to = parsePoint(value.arrow.to, `${field}.arrow.to`);
+    if (from[0] === to[0] && from[1] === to[1]) {
+      throw new SpecError(`${field}.arrow must have different from and to points.`);
+    }
+    return { arrow: { from, to } };
+  }
+  if (hasKeys(value, ['label']) && hasKeys(value.label, ['at', 'text'])) {
+    const at = parsePoint(value.label.at, `${field}.label.at`);
+    const text = requireText(value.label.text, `${field}.label.text`, ANNOTATION_TEXT_MAX);
+    if (text.trim() === '' || /[\r\n\v\f\u0085\u2028\u2029]/u.test(text)) {
+      throw new SpecError(`${field}.label.text must be a non-blank single line.`);
+    }
+    return { label: { at, text } };
+  }
+  throw new SpecError(`${field} must be { "arrow": { "from": [x, y], "to": [x, y] } } or { "label": { "at": [x, y], "text": string } }.`);
+}
+
+function parseScreenshot(value, { names }) {
+  const isNamed = typeof value === 'string';
+  if (!isNamed && !hasKeys(value, ['name', 'annotations'])) {
+    throw new SpecError('screenshot must be a name or { "name": string, "annotations": [...] }.');
+  }
+  const { name, annotations } = isNamed ? { name: value, annotations: [] } : value;
+  if (typeof name !== 'string' || !SCREENSHOT_NAME.test(name)) {
+    throw new SpecError('screenshot must be a name of lowercase letters, digits and dashes.');
+  }
+  if (names.has(name)) {
+    throw new SpecError(`screenshot name ${name} is used twice.`);
+  }
+  if (!Array.isArray(annotations) || annotations.length > ANNOTATIONS_MAX) {
+    throw new SpecError(`screenshot.annotations must be a list of at most ${ANNOTATIONS_MAX} marks.`);
+  }
+  names.add(name);
+  return { name, annotations: annotations.map(parseAnnotation) };
+}
+
 const STEP_PARSERS = {
   goto: (value, { baseUrl }) => {
     const target = urlOrNull(requireText(value, 'goto', 2000), baseUrl);
@@ -119,16 +171,7 @@ const STEP_PARSERS = {
     }
     return value;
   },
-  screenshot: (value, { names }) => {
-    if (typeof value !== 'string' || !SCREENSHOT_NAME.test(value)) {
-      throw new SpecError('screenshot must be a name of lowercase letters, digits and dashes.');
-    }
-    if (names.has(value)) {
-      throw new SpecError(`screenshot name ${value} is used twice.`);
-    }
-    names.add(value);
-    return value;
-  },
+  screenshot: parseScreenshot,
 };
 
 export const STEP_KINDS = Object.keys(STEP_PARSERS);
@@ -203,8 +246,10 @@ export const describeDestination = (url) => {
   return parsed && parsed.origin !== 'null' ? parsed.origin : url.slice(0, 200);
 };
 
+export const screenshotPath = (outDir, name) => path.join(outDir, `${name}.png`);
+
 export const captureOutputs = (spec) => [
-  ...spec.steps.filter((step) => step.kind === 'screenshot').map((step) => path.join(spec.outDir, `${step.value}.png`)),
+  ...spec.steps.filter((step) => step.kind === 'screenshot').map((step) => screenshotPath(spec.outDir, step.value.name)),
   ...(spec.record ? [path.join(spec.outDir, RECORDING_NAME)] : []),
 ];
 

@@ -4,6 +4,7 @@ import { createRequire } from 'node:module';
 import os from 'node:os';
 import path from 'node:path';
 
+import { drawScreenshotAnnotations } from './media-annotations.mjs';
 import {
   MEDIA_TOOLS,
   MERMAID_BUNDLE,
@@ -20,6 +21,7 @@ import {
   mermaidBundleFile,
   npmCommand,
   parseCaptureSpec,
+  screenshotPath,
 } from './media.mjs';
 import { atomicWrite, ensureDir, parseJson, readTextOrNull, unlessUnreadable, urlOrNull } from './util.mjs';
 
@@ -219,8 +221,8 @@ const STEP_HANDLERS = {
   press: (page, key) => page.keyboard.press(key),
   waitFor: (page, selector) => page.waitForSelector(selector, { state: 'visible' }),
   wait: (page, ms) => page.waitForTimeout(ms),
-  screenshot: async (page, name, run) => {
-    const file = path.join(run.outDir, `${name}.png`);
+  screenshot: async (page, { name }, run) => {
+    const file = screenshotPath(run.outDir, name);
     run.files.push(file);
     await page.screenshot({ path: file, fullPage: false });
   },
@@ -393,6 +395,33 @@ function refuseOverwrite(spec) {
   }
 }
 
+async function annotateScreenshots(browser, spec) {
+  const annotated = spec.steps.filter((step) => step.kind === 'screenshot' && step.value.annotations.length > 0);
+  if (annotated.length === 0) {
+    return;
+  }
+  const context = await browser.newContext({ offline: true, serviceWorkers: 'block' });
+  try {
+    const page = await context.newPage();
+    const pngPrefix = 'data:image/png;base64,';
+    for (const { value: { name, annotations } } of annotated) {
+      try {
+        const file = screenshotPath(spec.outDir, name);
+        const png = fs.readFileSync(file, 'base64');
+        const rendered = await page.evaluate(drawScreenshotAnnotations, { png, annotations });
+        if (!rendered.startsWith(pngPrefix)) {
+          throw new MediaError('Chromium did not return a PNG.');
+        }
+        fs.writeFileSync(file, Buffer.from(rendered.slice(pngPrefix.length), 'base64'));
+      } catch (err) {
+        throw new MediaError(`Screenshot ${name} could not be annotated: ${messageOf(err)}`, { cause: err });
+      }
+    }
+  } finally {
+    await context.close();
+  }
+}
+
 async function recordRun(chromium, spec, run) {
   const videoDir = spec.record ? fs.mkdtempSync(path.join(os.tmpdir(), 'pulse-video-')) : null;
   const browser = await chromium.launch();
@@ -406,6 +435,7 @@ async function recordRun(chromium, spec, run) {
     if (videoDir) {
       await saveRecording(page, run);
     }
+    await annotateScreenshots(browser, spec);
   } finally {
     await browser.close();
     if (videoDir) {

@@ -59,9 +59,10 @@ To sign out of Pulse on this computer, say **disconnect**. It signs out Claude C
 
 ## Daily update with screenshots
 
-`/pulse:daily` (Codex: `$pulse:daily`) can show your work with media. The assistant reads the diff of each change
-in this folder and proposes a screen recording, a screenshot, an architecture diagram or none, then asks which to
-make. Screenshots and recordings need the app running on your computer and a test account.
+`/pulse:daily` (Codex: `$pulse:daily`) proposes a screen recording, screenshot or diagram for changes worth showing.
+For screenshots and recordings, the assistant uses the project's setup to start the app locally. It creates a test
+account and sample data if needed. If capture is blocked, it tries a fallback you picked, such as a diagram of the changed flow.
+Ask the assistant to add an arrow or a short label if you want it to point out a specific change on a screenshot.
 
 The first time, it asks to install Playwright, Mermaid and a Chromium browser into `~/.config/pulse/media-tools` (or `PULSE_HOME`).
 The install runs no package scripts, and Mermaid is one file checked against a pinned hash. Recordings start after sign-in. Before you share a screen recording, the assistant asks you to watch it.
@@ -125,8 +126,8 @@ An assistant that you allow to run any shell command runs as you: it can read th
 
 ## For maintainers
 
-The plugin is developed in a private repository and published to `prlct/pulse-plugin` automatically
-from the `production` branch, on every merge that changes the plugin.
+The plugin is developed in a private repository and published to `prlct/pulse-plugin` automatically; the
+published branch is set by the `PULSE_PLUGIN_BRANCH` repository variable.
 
 Run the Pulse API on `http://localhost:3001`, then:
 
